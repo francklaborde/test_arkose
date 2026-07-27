@@ -40,8 +40,8 @@ from typing import Optional
 
 from openai import OpenAI
 
-from .climber_profile import ClimberProfile, Injury
-from .sboulder_collector import ROUTE_TYPES_BY_ID, ROUTE_TYPE_LEAF_IDS
+from climber_profile import ClimberProfile, Injury
+from sboulder_collector import ROUTE_TYPES_BY_ID, ROUTE_TYPE_LEAF_IDS
 
 log = logging.getLogger("climbing_coach")
 
@@ -85,11 +85,16 @@ class RecentAscent:
     detected_at: str
     route_type_labels: list[str] = field(default_factory=list)
     gym: str = ""
+    sents_count: int = 0        # gym-wide send count — rarity signal
+    flashes_count: int = 0
+    comments: list[str] = field(default_factory=list)
+    # meaningful text comments from the community (empty-text filtered out)
 
     def __str__(self) -> str:
         kind = "flashé" if self.ascent_type == "flash" else "envoyé"
         types = f" [{', '.join(self.route_type_labels)}]" if self.route_type_labels else ""
-        return f"{self.grade or '?'} {kind}{types} ({self.detected_at[:10]})"
+        rarity = f" — {self.sents_count} envois salle" if self.sents_count else ""
+        return f"{self.grade or '?'} {kind}{types}{rarity} ({self.detected_at[:10]})"
 
 
 @dataclass
@@ -121,6 +126,10 @@ class ClimbingStats:
 
     # Last sync timestamp per gym
     last_sync: dict[str, Optional[str]] = field(default_factory=dict)
+
+    # Unsent open boulders with community comments (potential projects)
+    # list of (boulder_id, grade, sents_count, comment_texts)
+    commented_projects: list[dict] = field(default_factory=list)
 
     @property
     def weakest_route_types(self) -> list[RouteTypeStat]:
@@ -181,11 +190,22 @@ class ClimbingStats:
             )
             lines.append(f"- **Blocs ouverts non envoyés** : {unsent_str}")
 
-        # Recent ascents
+        # Recent ascents with community context
         if self.recent_ascents:
-            lines.append(f"- **Derniers envois** :")
+            lines.append("- **Derniers envois** :")
             for a in self.recent_ascents[:max_recent]:
                 lines.append(f"  - {a}")
+                for comment in a.comments[:2]:  # max 2 comments per ascent
+                    lines.append(f'    > "{comment}"')
+
+        # Commented projects (unsent boulders with community feedback)
+        if self.commented_projects:
+            lines.append("- **Projets avec commentaires communautaires** :")
+            for p in self.commented_projects[:5]:
+                rarity = f"{p['sents_count']} envois salle"
+                lines.append(f"  - {p['grade'] or '?'} ({rarity}) :")
+                for c in p["comments"][:2]:
+                    lines.append(f'    > "{c}"')
 
         # Last sync
         if self.last_sync:
@@ -248,6 +268,17 @@ class StatsBuilder:
 
         # Unsent open boulders
         stats.unsent_by_grade = self._unsent_by_grade(sent_ids, gyms)
+
+        # Commented projects — unsent boulders that have community text comments
+        stats.commented_projects = self._commented_projects(sent_ids, gyms)
+
+        # Enrich recent ascents with send counts + comments
+        for ascent in stats.recent_ascents:
+            row = self._boulder_meta(ascent.boulder_id)
+            if row:
+                ascent.sents_count   = row["sents_count"] or 0
+                ascent.flashes_count = row["flashes_count"] or 0
+            ascent.comments = self._boulder_comments(ascent.boulder_id)
 
         # Last sync per gym
         stats.last_sync = {gym: self._last_sync(gym) for gym in gyms}
@@ -386,6 +417,55 @@ class StatsBuilder:
             if r["boulder_id"] not in sent_ids:
                 counts[r["grade"]] = counts.get(r["grade"], 0) + 1
         return counts
+
+    def _boulder_meta(self, boulder_id: str) -> Optional[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT sents_count, flashes_count FROM boulders WHERE boulder_id=?",
+            (boulder_id,),
+        ).fetchone()
+
+    def _boulder_comments(self, boulder_id: str, max_comments: int = 5) -> list[str]:
+        """Return meaningful text comments for a boulder, newest first."""
+        rows = self._conn.execute(
+            """SELECT text FROM comments
+               WHERE boulder_id=? AND text != '' AND text IS NOT NULL
+               ORDER BY date DESC LIMIT ?""",
+            (boulder_id, max_comments),
+        ).fetchall()
+        return [r["text"] for r in rows]
+
+    def _commented_projects(
+        self, sent_ids: set[str], gyms: list[str]
+    ) -> list[dict]:
+        """
+        Unsent open boulders that have at least one meaningful community comment.
+        Sorted by gym-wide send count desc (popular routes = likely good projects).
+        """
+        gym_placeholders = ",".join("?" * len(gyms))
+        rows = self._conn.execute(
+            f"""SELECT b.boulder_id, b.grade, b.sents_count, b.flashes_count
+               FROM boulders b
+               WHERE b.gym IN ({gym_placeholders})
+                 AND b.closed_at IS NULL
+               ORDER BY b.sents_count DESC""",
+            gyms,
+        ).fetchall()
+
+        result = []
+        for r in rows:
+            if r["boulder_id"] in sent_ids:
+                continue
+            comments = self._boulder_comments(r["boulder_id"])
+            if not comments:
+                continue
+            result.append({
+                "boulder_id":   r["boulder_id"],
+                "grade":        r["grade"],
+                "sents_count":  r["sents_count"] or 0,
+                "flashes_count": r["flashes_count"] or 0,
+                "comments":     comments,
+            })
+        return result
 
     def _last_sync(self, gym: str) -> Optional[str]:
         row = self._conn.execute(

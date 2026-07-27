@@ -30,6 +30,8 @@ from typing import Optional
 
 import websocket  # websocket-client
 
+from climber_profile import Injury, ClimberProfile  # noqa: F401
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -205,6 +207,56 @@ class Boulder:
 
 
 # ---------------------------------------------------------------------------
+# BoulderComment — a single community comment on a boulder
+# ---------------------------------------------------------------------------
+
+@dataclass
+class BoulderComment:
+    comment_id: str
+    boulder_id: str
+    user_id: str
+    user_name: str
+    user_level: Optional[int]   # label score at the gym (e.g. 7 = grade 7 climber)
+    text: str
+    has_video: bool
+    date: Optional[str]
+
+    @classmethod
+    def from_ddp(cls, comment_id: str, fields: dict) -> "BoulderComment":
+        # Parse nested userProfile Astronomy object
+        user_name = ""
+        user_level = None
+        try:
+            up = fields.get("userProfile", {})
+            values_str = up.get("$value", {}).get("values", "{}")
+            values = json.loads(values_str)
+            user_name = values.get("name", "")
+            # scores is a dict of gym_slug -> {label: int}
+            scores = values.get("scores", {})
+            gym = fields.get("boulder", {}).get("gym", "")
+            if gym and gym in scores:
+                user_level = scores[gym].get("label")
+        except Exception:
+            pass
+
+        return cls(
+            comment_id=comment_id,
+            boulder_id=fields.get("boulderId", ""),
+            user_id=fields.get("userId", ""),
+            user_name=user_name,
+            user_level=user_level,
+            text=fields.get("text", "").strip(),
+            has_video=bool(fields.get("videoId")),
+            date=_parse_date(fields.get("date")),
+        )
+
+    @property
+    def is_meaningful(self) -> bool:
+        """True if the comment has actual text (not just a video post)."""
+        return bool(self.text)
+
+
+# ---------------------------------------------------------------------------
 # SyncResult: what changed during one run
 # ---------------------------------------------------------------------------
 
@@ -295,8 +347,22 @@ class BoulderDB:
                 fetched     INTEGER DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS comments (
+                comment_id      TEXT PRIMARY KEY,
+                boulder_id      TEXT NOT NULL,
+                user_id         TEXT NOT NULL,
+                user_name       TEXT,
+                user_level      INTEGER,        -- commenter's grade label at the gym
+                text            TEXT,
+                has_video       INTEGER DEFAULT 0,
+                date            TEXT,
+                first_seen_at   TEXT NOT NULL,
+                FOREIGN KEY(boulder_id) REFERENCES boulders(boulder_id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_boulders_gym ON boulders(gym);
             CREATE INDEX IF NOT EXISTS idx_ascents_user ON ascents(user_id);
+            CREATE INDEX IF NOT EXISTS idx_comments_boulder ON comments(boulder_id);
         """)
         self._conn.commit()
 
@@ -384,6 +450,44 @@ class BoulderDB:
         except sqlite3.IntegrityError:
             return False  # already recorded
 
+    def upsert_comment(self, c: "BoulderComment", now: str) -> bool:
+        """Insert a comment if not already stored. Returns True if new."""
+        existing = self._conn.execute(
+            "SELECT comment_id FROM comments WHERE comment_id=?", (c.comment_id,)
+        ).fetchone()
+        if existing:
+            return False
+        with self._tx() as cur:
+            cur.execute("""
+                INSERT INTO comments
+                    (comment_id, boulder_id, user_id, user_name, user_level,
+                     text, has_video, date, first_seen_at)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, (
+                c.comment_id, c.boulder_id, c.user_id, c.user_name,
+                c.user_level, c.text, int(c.has_video), c.date, now,
+            ))
+        return True
+
+    def get_comments_for_boulder(self, boulder_id: str) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            """SELECT * FROM comments WHERE boulder_id=?
+               ORDER BY date DESC""",
+            (boulder_id,),
+        ).fetchall()
+
+    def get_comments_for_gym(self, gym: str, meaningful_only: bool = True) -> list[sqlite3.Row]:
+        """Return all comments for boulders belonging to a gym."""
+        query = """
+            SELECT c.* FROM comments c
+            JOIN boulders b ON c.boulder_id = b.boulder_id
+            WHERE b.gym = ?
+        """
+        if meaningful_only:
+            query += " AND c.text != '' AND c.text IS NOT NULL"
+        query += " ORDER BY c.date DESC"
+        return self._conn.execute(query, (gym,)).fetchall()
+
     def log_sync(self, gym: str, synced_at: str, fetched: int):
         with self._tx() as cur:
             cur.execute(
@@ -451,8 +555,11 @@ class SBoulderCollector:
 
         # Internal state reset on each sync() call
         self._raw_boulders: dict[str, dict] = {}
+        self._raw_comments: dict[str, dict] = {}
         self._ready = False
         self._sub_id: Optional[str] = None
+        self._comment_sub_ids: set[str] = set()
+        self._comments_requested = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -467,8 +574,11 @@ class SBoulderCollector:
 
         # Reset per-run state
         self._raw_boulders = {}
+        self._raw_comments = {}
         self._ready = False
         self._sub_id = _random_id()
+        self._comment_sub_ids = set()
+        self._comments_requested = False
 
         ws_url = self._build_ws_url()
         log.debug("WebSocket URL: %s", ws_url)
@@ -501,9 +611,14 @@ class SBoulderCollector:
             Boulder.from_ddp(doc_id, fields)
             for doc_id, fields in self._raw_boulders.items()
         ]
-        log.info("Fetched %d boulders from WebSocket", len(boulders))
+        comments = [
+            BoulderComment.from_ddp(cid, fields)
+            for cid, fields in self._raw_comments.items()
+        ]
+        log.info("Fetched %d boulders, %d comments from WebSocket",
+                 len(boulders), len(comments))
 
-        return self._persist(gym, boulders)
+        return self._persist(gym, boulders, comments)
 
     def sync_multiple(self, gyms: list[str], limit: int = 500) -> list[SyncResult]:
         """Convenience wrapper: sync several gyms in sequence."""
@@ -580,14 +695,38 @@ class SBoulderCollector:
                     data.get("fields", {})
                 )
 
+            elif msg_type == "added" and data.get("collection") == "comments":
+                self._raw_comments.setdefault(data["id"], data.get("fields", {}))
+
             elif msg_type == "ready":
                 subs = data.get("subs", [])
                 if self._sub_id in subs:
-                    log.debug("Subscription ready (sub_id=%s)", self._sub_id)
+                    log.debug("Boulder subscription ready — fetching comments")
+                    # Trigger one comment subscription per boulder
+                    if not self._comments_requested:
+                        self._comments_requested = True
+                        self._fetch_comments(ws, list(self._raw_boulders.keys()))
+                # All comment subs returned ready → we're done
+                elif self._comment_sub_ids and self._comment_sub_ids.issubset(set(subs)):
+                    log.debug("All comment subscriptions ready")
                     self._ready = True
 
             elif msg_type == "error":
                 log.error("DDP error: %s", data)
+
+    def _fetch_comments(self, ws, boulder_ids: list[str], delay: float = 0.15):
+        """Subscribe to comments for each boulder individually."""
+        log.info("Fetching comments for %d boulders...", len(boulder_ids))
+        for bid in boulder_ids:
+            sub_id = _random_id()
+            self._comment_sub_ids.add(sub_id)
+            ws.send(json.dumps([json.dumps({
+                "msg": "sub",
+                "id": sub_id,
+                "name": "_boulders.comments",
+                "params": [bid],
+            })]))
+            time.sleep(delay)
 
     def _on_error(self, ws, error):
         log.error("WebSocket error: %s", error)
@@ -599,7 +738,12 @@ class SBoulderCollector:
     # Persistence + diff logic
     # ------------------------------------------------------------------
 
-    def _persist(self, gym: str, boulders: list[Boulder]) -> SyncResult:
+    def _persist(
+        self,
+        gym: str,
+        boulders: list[Boulder],
+        comments: list["BoulderComment"],
+    ) -> SyncResult:
         now = _now_iso()
         result = SyncResult(gym=gym, synced_at=now, total_fetched=len(boulders))
 
@@ -630,6 +774,12 @@ class SBoulderCollector:
                     if self.db.record_ascent(b.boulder_id, self.user_id, "flash", now):
                         result.newly_flashed.append(b)
 
+        # Persist comments (skip duplicates silently)
+        new_comments = sum(
+            1 for c in comments if self.db.upsert_comment(c, now)
+        )
+        log.info("Stored %d new comments (%d total fetched)", new_comments, len(comments))
+
         self.db.log_sync(gym=gym, synced_at=now, fetched=len(boulders))
 
         log.info(result.summary(self.user_id))
@@ -648,11 +798,18 @@ if __name__ == "__main__":
     parser.add_argument("--user-id", default=None, help="Your SBoulder user ID")
     parser.add_argument("--db", default="climbing.db", help="SQLite file path")
     parser.add_argument("--limit", type=int, default=500, help="Max boulders to fetch")
+    parser.add_argument("--profile", default="climber_profile.json", help="Profile JSON path")
     args = parser.parse_args()
 
-    collector = SBoulderCollector(user_id=args.user_id, db_path=args.db)
+    profile = ClimberProfile.load_or_create(args.profile)
+    user_id = args.user_id or profile.sboulder_user_id or None
+
+    collector = SBoulderCollector(user_id=user_id, db_path=args.db)
     try:
         result = collector.sync(gym=args.gym, limit=args.limit)
-        print(result.summary(args.user_id))
+        print(result.summary(user_id))
+        if profile.name:
+            print(f"\n--- LLM context preview for {profile.name} ---")
+            print(profile.to_llm_context())
     finally:
         collector.close()
