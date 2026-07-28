@@ -426,6 +426,11 @@ class StatsBuilder:
 
     def _boulder_comments(self, boulder_id: str, max_comments: int = 5) -> list[str]:
         """Return meaningful text comments for a boulder, newest first."""
+        tables = self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='comments'"
+        ).fetchone()
+        if not tables:
+            return []
         rows = self._conn.execute(
             """SELECT text FROM comments
                WHERE boulder_id=? AND text != '' AND text IS NOT NULL
