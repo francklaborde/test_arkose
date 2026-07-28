@@ -35,11 +35,46 @@ from climber_profile import Injury, ClimberProfile  # noqa: F401
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
+# We do NOT call basicConfig here — that's the entry point's job.
+# Instead we add a NullHandler so log calls are silently dropped if the
+# caller hasn't configured logging (standard library best practice).
 log = logging.getLogger("sboulder")
+log.addHandler(logging.NullHandler())
+
+
+def setup_logging(level: int = logging.INFO) -> None:
+    """
+    Call this once from your server startup or notebook to activate logs
+    for all arkose modules (sboulder, climbing_coach, sboulder.profile).
+
+    Works correctly whether uvicorn/Jupyter has already configured the
+    root logger or not — attaches directly to each module logger so it
+    never fights with the host framework.
+
+    Example
+    -------
+    from sboulder_collector import setup_logging
+    setup_logging()               # INFO by default
+    setup_logging(logging.DEBUG)  # verbose, shows per-boulder inserts
+    """
+    fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    handler = logging.StreamHandler()
+    handler.setFormatter(fmt)
+
+    # Apply to every arkose logger explicitly — this works even when
+    # uvicorn or Jupyter already owns the root logger.
+    for name in ("sboulder", "sboulder.profile", "climbing_coach"):
+        logger = logging.getLogger(name)
+        # Remove the NullHandler that was added at import time
+        logger.handlers = [h for h in logger.handlers
+                           if not isinstance(h, logging.NullHandler)]
+        if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+            logger.addHandler(handler)
+        logger.setLevel(level)
+        logger.propagate = False   # don't double-print via the root logger
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -312,6 +347,7 @@ class BoulderDB:
     # ------------------------------------------------------------------
 
     def _create_schema(self):
+        log.info("Initializing database schema...")
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS boulders (
                 boulder_id      TEXT PRIMARY KEY,
@@ -365,6 +401,7 @@ class BoulderDB:
             CREATE INDEX IF NOT EXISTS idx_comments_boulder ON comments(boulder_id);
         """)
         self._conn.commit()
+        log.info("Schema ready (tables: boulders, ascents, comments, sync_log)")
 
     # ------------------------------------------------------------------
     # Context manager for transactions
@@ -570,7 +607,9 @@ class SBoulderCollector:
         Connect to sboulder.com, pull up to `limit` boulders for `gym`,
         persist to DB, and return a SyncResult describing what changed.
         """
-        log.info("Starting sync for gym=%s (limit=%d)", gym, limit)
+        log.info("=" * 60)
+        log.info("Starting sync | gym=%s | limit=%d", gym, limit)
+        log.info("=" * 60)
 
         # Reset per-run state
         self._raw_boulders = {}
@@ -581,7 +620,8 @@ class SBoulderCollector:
         self._comments_requested = False
 
         ws_url = self._build_ws_url()
-        log.debug("WebSocket URL: %s", ws_url)
+        log.info("WebSocket URL: %s", ws_url)
+        log.info("Timeout: %ds", self.READY_TIMEOUT)
 
         ws = websocket.WebSocketApp(
             ws_url,
@@ -605,7 +645,13 @@ class SBoulderCollector:
         thread.join(timeout=5)
 
         if not self._ready:
-            log.warning("Timed out waiting for 'ready' signal — partial data may have been collected")
+            log.warning("Timed out after %ds — partial data collected "
+                        "(%d boulders, %d comments)",
+                        self.READY_TIMEOUT,
+                        len(self._raw_boulders),
+                        len(self._raw_comments))
+        else:
+            log.info("Data collection complete")
 
         boulders = [
             Boulder.from_ddp(doc_id, fields)
@@ -637,7 +683,8 @@ class SBoulderCollector:
         return WS_URL_TEMPLATE.format(server=server, session=session)
 
     def _on_open(self, ws, gym: str, limit: int):
-        log.debug("WebSocket opened — sending DDP handshake")
+        log.info("WebSocket connected → %s", ws.url)
+        log.info("Sending DDP handshake...")
         # 1. DDP connect handshake
         ws.send(json.dumps([json.dumps({
             "msg": "connect",
@@ -646,6 +693,7 @@ class SBoulderCollector:
         })]))
         time.sleep(0.8)
 
+        log.info("Subscribing to boulders (gym=%s, limit=%d)", gym, limit)
         # 2. Subscribe to boulders list
         ws.send(json.dumps([json.dumps({
             "msg": "sub",
@@ -689,6 +737,9 @@ class SBoulderCollector:
 
             if msg_type == "added" and data.get("collection") == "boulders":
                 self._raw_boulders[data["id"]] = data.get("fields", {})
+                n = len(self._raw_boulders)
+                if n % 50 == 0:
+                    log.info("  ... %d boulders received so far", n)
 
             elif msg_type == "changed" and data.get("collection") == "boulders":
                 self._raw_boulders.setdefault(data["id"], {}).update(
@@ -697,18 +748,22 @@ class SBoulderCollector:
 
             elif msg_type == "added" and data.get("collection") == "comments":
                 self._raw_comments.setdefault(data["id"], data.get("fields", {}))
+                n = len(self._raw_comments)
+                if n % 100 == 0:
+                    log.info("  ... %d comments received so far", n)
 
             elif msg_type == "ready":
                 subs = data.get("subs", [])
                 if self._sub_id in subs:
-                    log.debug("Boulder subscription ready — fetching comments")
-                    # Trigger one comment subscription per boulder
+                    log.info("Boulder subscription ready — %d boulders received",
+                             len(self._raw_boulders))
                     if not self._comments_requested:
                         self._comments_requested = True
                         self._fetch_comments(ws, list(self._raw_boulders.keys()))
                 # All comment subs returned ready → we're done
                 elif self._comment_sub_ids and self._comment_sub_ids.issubset(set(subs)):
-                    log.debug("All comment subscriptions ready")
+                    log.info("All comment subscriptions ready — %d comments received",
+                             len(self._raw_comments))
                     self._ready = True
 
             elif msg_type == "error":
@@ -716,8 +771,9 @@ class SBoulderCollector:
 
     def _fetch_comments(self, ws, boulder_ids: list[str], delay: float = 0.15):
         """Subscribe to comments for each boulder individually."""
-        log.info("Fetching comments for %d boulders...", len(boulder_ids))
-        for bid in boulder_ids:
+        log.info("Sending %d comment subscriptions (delay=%.2fs each)...",
+                 len(boulder_ids), delay)
+        for i, bid in enumerate(boulder_ids, 1):
             sub_id = _random_id()
             self._comment_sub_ids.add(sub_id)
             ws.send(json.dumps([json.dumps({
@@ -726,13 +782,16 @@ class SBoulderCollector:
                 "name": "_boulders.comments",
                 "params": [bid],
             })]))
+            if i % 50 == 0:
+                log.info("  ... %d/%d comment subs sent", i, len(boulder_ids))
             time.sleep(delay)
+        log.info("All comment subscriptions sent — waiting for ready signal")
 
     def _on_error(self, ws, error):
         log.error("WebSocket error: %s", error)
 
     def _on_close(self, ws, close_status_code, close_msg):
-        log.debug("WebSocket closed (status=%s)", close_status_code)
+        log.info("WebSocket closed (status=%s, msg=%s)", close_status_code, close_msg)
 
     # ------------------------------------------------------------------
     # Persistence + diff logic
@@ -747,40 +806,62 @@ class SBoulderCollector:
         now = _now_iso()
         result = SyncResult(gym=gym, synced_at=now, total_fetched=len(boulders))
 
+        log.info("Persisting %d boulders to database...", len(boulders))
+
         # Load existing closed_at values to detect newly-closed routes
         existing_closed: dict[str, Optional[str]] = {
             row["boulder_id"]: row["closed_at"]
             for row in self.db.get_boulders_for_gym(gym)
         }
+        log.debug("Loaded %d existing boulder records for diff", len(existing_closed))
 
         for b in boulders:
             is_new = self.db.upsert_boulder(b, now)
 
             if is_new:
+                log.debug("  [NEW]    %s grade=%s", b.boulder_id, b.grade)
                 result.new_boulders.append(b)
             else:
-                # Detect routes that just got a closedAt set
                 prev_closed = existing_closed.get(b.boulder_id)
                 if b.closed_at and not prev_closed:
+                    log.debug("  [CLOSED] %s grade=%s closedAt=%s",
+                              b.boulder_id, b.grade, b.closed_at[:10])
                     result.newly_closed.append(b)
 
             # Track personal ascents if a user_id is configured
             if self.user_id:
                 if b.is_sent_by(self.user_id):
                     if self.db.record_ascent(b.boulder_id, self.user_id, "send", now):
+                        log.info("  [SEND]   %s grade=%s (newly detected)",
+                                 b.boulder_id, b.grade)
                         result.newly_sent.append(b)
 
                 if b.is_flashed_by(self.user_id):
                     if self.db.record_ascent(b.boulder_id, self.user_id, "flash", now):
+                        log.info("  [FLASH]  %s grade=%s (newly detected)",
+                                 b.boulder_id, b.grade)
                         result.newly_flashed.append(b)
 
-        # Persist comments (skip duplicates silently)
+        log.info(
+            "Boulders persisted: %d new, %d updated, %d newly closed, "
+            "%d newly sent, %d newly flashed",
+            len(result.new_boulders),
+            len(boulders) - len(result.new_boulders),
+            len(result.newly_closed),
+            len(result.newly_sent),
+            len(result.newly_flashed),
+        )
+
+        # Persist comments
+        log.info("Persisting %d comments...", len(comments))
         new_comments = sum(
             1 for c in comments if self.db.upsert_comment(c, now)
         )
-        log.info("Stored %d new comments (%d total fetched)", new_comments, len(comments))
+        log.info("Comments persisted: %d new, %d duplicates skipped",
+                 new_comments, len(comments) - new_comments)
 
         self.db.log_sync(gym=gym, synced_at=now, fetched=len(boulders))
+        log.info("Sync logged to sync_log table")
 
         log.info(result.summary(self.user_id))
         return result
