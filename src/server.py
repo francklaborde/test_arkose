@@ -5,7 +5,9 @@ import uuid
 
 from climbing_coach import ClimbingCoach, CoachMode
 from climber_profile import ClimberProfile
+from sboulder_collector import setup_logging
 
+setup_logging()
 app = FastAPI()
 
 # In-memory session store: session_id -> ClimbingCoach instance
