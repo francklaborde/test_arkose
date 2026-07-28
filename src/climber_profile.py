@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger("sboulder.profile")
+log.addHandler(logging.NullHandler())
 
 
 # ---------------------------------------------------------------------------
@@ -339,7 +340,7 @@ class ClimberProfile:
 
 if __name__ == "__main__":
     import argparse
-    print("working")
+
     parser = argparse.ArgumentParser(description="Manage a climber profile JSON")
     parser.add_argument("path", nargs="?", default="climber_profile.json",
                         help="Path to the JSON profile file")
