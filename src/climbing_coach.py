@@ -47,6 +47,9 @@ log = logging.getLogger("climbing_coach")
 log.addHandler(logging.NullHandler())
 
 
+def _now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat()
+
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------
@@ -452,9 +455,9 @@ class StatsBuilder:
             f"""SELECT b.boulder_id, b.grade, b.sents_count, b.flashes_count
                FROM boulders b
                WHERE b.gym IN ({gym_placeholders})
-                 AND b.closed_at IS NULL
+                 AND (closed_at IS NULL OR closed_at > ?)
                ORDER BY b.sents_count DESC""",
-            gyms,
+            (*gyms, _now_iso()),
         ).fetchall()
 
         result = []
