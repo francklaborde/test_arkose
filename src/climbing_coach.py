@@ -41,7 +41,7 @@ from typing import Optional
 from openai import OpenAI
 
 from climber_profile import ClimberProfile, Injury
-from sboulder_collector import ROUTE_TYPES_BY_ID, ROUTE_TYPE_LEAF_IDS
+from sboulder_collector import SBoulderCollector, ROUTE_TYPES_BY_ID, ROUTE_TYPE_LEAF_IDS, decode_grade
 
 log = logging.getLogger("climbing_coach")
 log.addHandler(logging.NullHandler())
@@ -89,6 +89,7 @@ class RecentAscent:
     detected_at: str
     route_type_labels: list[str] = field(default_factory=list)
     gym: str = ""
+    holds_color: Optional[int] = None
     sents_count: int = 0        # gym-wide send count — rarity signal
     flashes_count: int = 0
     comments: list[str] = field(default_factory=list)
@@ -96,9 +97,10 @@ class RecentAscent:
 
     def __str__(self) -> str:
         kind = "flashé" if self.ascent_type == "flash" else "envoyé"
+        label = decode_grade(self.holds_color, self.grade) if self.holds_color else (self.grade or "?")
         types = f" [{', '.join(self.route_type_labels)}]" if self.route_type_labels else ""
         rarity = f" — {self.sents_count} envois salle" if self.sents_count else ""
-        return f"{self.grade or '?'} {kind}{types}{rarity} ({self.detected_at[:10]})"
+        return f"{label} {kind}{types}{rarity} ({self.detected_at[:10]})"
 
 
 @dataclass
@@ -282,6 +284,7 @@ class StatsBuilder:
             if row:
                 ascent.sents_count   = row["sents_count"] or 0
                 ascent.flashes_count = row["flashes_count"] or 0
+                ascent.holds_color   = row["holds_color"]
             ascent.comments = self._boulder_comments(ascent.boulder_id)
 
         # Last sync per gym
@@ -320,12 +323,15 @@ class StatsBuilder:
             return {}
         placeholders = ",".join("?" * len(boulder_ids))
         rows = self._conn.execute(
-            f"SELECT grade, COUNT(*) as c FROM boulders "
-            f"WHERE boulder_id IN ({placeholders}) AND grade IS NOT NULL "
-            f"GROUP BY grade ORDER BY grade",
+            f"SELECT holds_color, grade, COUNT(*) as c FROM boulders "
+            f"WHERE boulder_id IN ({placeholders}) AND grade IS NOT NULL AND holds_color IS NOT NULL "
+            f"GROUP BY holds_color, grade ORDER BY holds_color, grade",
             list(boulder_ids),
         ).fetchall()
-        return {r["grade"]: r["c"] for r in rows}
+        return {
+            decode_grade(r["holds_color"], r["grade"]): r["c"]
+            for r in rows
+        }
 
     def _route_type_stats(
         self, sent_ids: set[str], gyms: list[str]
@@ -411,20 +417,22 @@ class StatsBuilder:
         """Open boulders (no closed_at) not yet sent by the user, grouped by grade."""
         gym_placeholders = ",".join("?" * len(gyms))
         rows = self._conn.execute(
-            f"SELECT boulder_id, grade FROM boulders "
-            f"WHERE gym IN ({gym_placeholders}) AND closed_at IS NULL AND grade IS NOT NULL",
-            gyms,
+            f"SELECT boulder_id, holds_color, grade FROM boulders "
+            f"WHERE gym IN ({gym_placeholders}) AND (closed_at IS NULL OR closed_at > ?)"
+            f"AND grade IS NOT NULL AND holds_color IS NOT NULL",
+            (*gyms, _now_iso()),
         ).fetchall()
 
         counts: dict[str, int] = {}
         for r in rows:
             if r["boulder_id"] not in sent_ids:
-                counts[r["grade"]] = counts.get(r["grade"], 0) + 1
+                label = decode_grade(r["holds_color"], r["grade"])
+                counts[label] = counts.get(label, 0) + 1
         return counts
 
     def _boulder_meta(self, boulder_id: str) -> Optional[sqlite3.Row]:
         return self._conn.execute(
-            "SELECT sents_count, flashes_count FROM boulders WHERE boulder_id=?",
+            "SELECT sents_count, flashes_count, holds_color FROM boulders WHERE boulder_id=?",
             (boulder_id,),
         ).fetchone()
 

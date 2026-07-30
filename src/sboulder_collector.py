@@ -158,6 +158,33 @@ def route_type_category(type_id: int) -> Optional["RouteTypeInfo"]:
         return None
     return ROUTE_TYPES_BY_ID.get(rt.parent_id)
 
+@dataclass(frozen=True)
+class GradeInfo:
+    color_code: int      # holds_color value (3-8)
+    color_fr: str
+    color_en: str
+
+GRADE_COLORS: dict[int, GradeInfo] = {
+    3: GradeInfo(3, "jaune", "yellow"),
+    4: GradeInfo(4, "vert", "green"),
+    5: GradeInfo(5, "bleu", "blue"),
+    6: GradeInfo(6, "rouge", "red"),
+    7: GradeInfo(7, "noir", "black"),
+    8: GradeInfo(8, "violet", "purple"),
+}
+
+def decode_grade(holds_color: int, grade: str, lang: str = "fr") -> str:
+    """
+    Turn (holds_color, grade) into a human-readable label,
+    e.g. (7, '3') -> 'noir 3 barres' or 'black 3 bars'.
+    """
+    info = GRADE_COLORS.get(holds_color)
+    if not info:
+        return f"couleur inconnue ({holds_color}) {grade}"
+    color = info.color_fr if lang == "fr" else info.color_en
+    unit = "barre" if lang == "fr" and grade == "1" else ("barres" if lang == "fr" else ("bar" if grade == "1" else "bars"))
+    return f"{color} {grade} {unit}"
+
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
