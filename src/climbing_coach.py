@@ -814,6 +814,10 @@ class ClimbingCoach:
         # StatsBuilder is optional — works without a DB
         self._stats_builder: Optional[StatsBuilder] = None
         if db_path and Path(db_path).exists():
+            self.collector = SBoulderCollector(
+                user_id=self.profile.sboulder_user_id if self.profile else None,
+                db_path=db_path
+            )
             self._stats_builder = StatsBuilder(db_path)
             log.info("StatsBuilder ready (db=%s)", db_path)
         elif db_path:
@@ -871,6 +875,8 @@ class ClimbingCoach:
                     "No profile loaded. Run an onboarding session first, "
                     "or load a profile with ClimberProfile.load()."
                 )
+            if self._stats_builder:
+                self.collector.sync_from_profile(self.profile)
             stats = self._build_stats()
             system = self.prompt_builder.coaching_system(self.profile, stats)
             self.llm.set_system(system)
