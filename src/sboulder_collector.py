@@ -720,6 +720,13 @@ class SBoulderCollector:
         """Convenience wrapper: sync several gyms in sequence."""
         return [self.sync(gym, limit) for gym in gyms]
 
+    def sync_from_profile(self, profile: "ClimberProfile", limit: int = 500) -> list[SyncResult]:
+        """Sync all gyms listed in the climber's profile."""
+        if not profile.gyms:
+            log.warning("No gyms configured in profile — nothing to sync")
+            return []
+        return self.sync_multiple(profile.gyms, limit)
+    
     def close(self):
         self.db.close()
 
