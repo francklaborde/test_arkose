@@ -206,6 +206,8 @@ class Boulder:
 
     @classmethod
     def from_ddp(cls, doc_id: str, fields: dict) -> "Boulder":
+        if fields.get("closedAt") is not None:
+            print(f"DEBUG closedAt for {doc_id}: {fields.get('closedAt')!r}")
         return cls(
             boulder_id=doc_id,
             gym=fields.get("gym", ""),
@@ -233,6 +235,13 @@ class Boulder:
             ROUTE_TYPES_BY_ID[i] for i in self.route_types
             if i in ROUTE_TYPES_BY_ID and not ROUTE_TYPES_BY_ID[i].is_category
         ]
+
+    @property
+    def is_currently_closed(self) -> bool:
+        """True only if closed_at is set AND already in the past."""
+        if not self.closed_at:
+            return False
+        return self.closed_at <= _now_iso()
 
     def is_sent_by(self, user_id: str) -> bool:
         return user_id in self.sents_list
@@ -470,6 +479,20 @@ class BoulderDB:
                 ))
 
         return is_new
+
+    def close_boulders(self, boulder_ids: list[str], now: str) -> int:
+        """Mark specific boulders as closed (only those still open)."""
+        if not boulder_ids:
+            return 0
+        placeholders = ",".join("?" for _ in boulder_ids)
+        with self._tx() as cur:
+            cur.execute(f"""
+                UPDATE boulders
+                SET closed_at = ?, last_updated_at = ?
+                WHERE boulder_id IN ({placeholders})
+                AND closed_at IS NULL
+            """, (now, now, *boulder_ids))
+            return cur.rowcount
 
     def record_ascent(self, boulder_id: str, user_id: str,
                       ascent_type: str, now: str) -> bool:
@@ -823,7 +846,7 @@ class SBoulderCollector:
                 result.new_boulders.append(b)
             else:
                 prev_closed = existing_closed.get(b.boulder_id)
-                if b.closed_at and not prev_closed:
+                if b.is_currently_closed and not prev_closed:
                     log.debug("  [CLOSED] %s grade=%s closedAt=%s",
                               b.boulder_id, b.grade, b.closed_at[:10])
                     result.newly_closed.append(b)
@@ -842,6 +865,27 @@ class SBoulderCollector:
                                  b.boulder_id, b.grade)
                         result.newly_flashed.append(b)
 
+        # Close boulders that were open in DB but absent from this sync's batch
+        # Safety guard: skip closing logic if this sync looks incomplete
+        MIN_EXPECTED_RATIO = 0.5  # tune as needed
+        if existing_closed and len(boulders) < len(existing_closed) * MIN_EXPECTED_RATIO:
+            log.warning(
+                "Sync fetched only %d boulders vs %d known — skipping closure "
+                "logic (likely partial/incomplete sync)",
+                len(boulders), len(existing_closed)
+            )
+        else:
+            # Close boulders that were open in DB but absent from this sync's batch
+            fetched_ids = {b.boulder_id for b in boulders}
+            missing_ids = [
+                bid for bid, closed_at in existing_closed.items()
+                if closed_at is None and bid not in fetched_ids
+            ]
+            if missing_ids:
+                closed_count = self.db.close_boulders(missing_ids, now)
+                log.info("Closed %d boulder(s) no longer present in gym feed: %s",
+                        closed_count, missing_ids)
+        
         log.info(
             "Boulders persisted: %d new, %d updated, %d newly closed, "
             "%d newly sent, %d newly flashed",
