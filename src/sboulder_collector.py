@@ -233,8 +233,6 @@ class Boulder:
 
     @classmethod
     def from_ddp(cls, doc_id: str, fields: dict) -> "Boulder":
-        if fields.get("closedAt") is not None:
-            print(f"DEBUG closedAt for {doc_id}: {fields.get('closedAt')!r}")
         return cls(
             boulder_id=doc_id,
             gym=fields.get("gym", ""),
