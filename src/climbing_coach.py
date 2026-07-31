@@ -804,12 +804,15 @@ class ClimbingCoach:
         profile: Optional[ClimberProfile] = None,
         db_path: Optional[str | Path] = None,
         profile_path: str | Path = "climber_profile.json",
+        auto_sync: bool = False,
+
     ):
         self.llm = llm
         self.profile = profile
         self.profile_path = Path(profile_path)
         self.prompt_builder = PromptBuilder()
         self.mode: Optional[CoachMode] = None
+        self.auto_sync = auto_sync
 
         # StatsBuilder is optional — works without a DB
         self._stats_builder: Optional[StatsBuilder] = None
@@ -835,10 +838,11 @@ class ClimbingCoach:
         profile: Optional[ClimberProfile] = None,
         db_path: Optional[str | Path] = None,
         profile_path: str | Path = "climber_profile.json",
+        auto_sync: bool = False,
         **llm_kwargs,
     ) -> "ClimbingCoach":
         llm = LLMClient.mistral(api_key=api_key, model=model, **llm_kwargs)
-        return cls(llm=llm, profile=profile, db_path=db_path, profile_path=profile_path)
+        return cls(llm=llm, profile=profile, db_path=db_path, profile_path=profile_path, auto_sync=auto_sync)
 
     @classmethod
     def from_openai(
@@ -848,10 +852,11 @@ class ClimbingCoach:
         profile: Optional[ClimberProfile] = None,
         db_path: Optional[str | Path] = None,
         profile_path: str | Path = "climber_profile.json",
+        auto_sync: bool = False,
         **llm_kwargs,
     ) -> "ClimbingCoach":
         llm = LLMClient.openai(api_key=api_key, model=model, **llm_kwargs)
-        return cls(llm=llm, profile=profile, db_path=db_path, profile_path=profile_path)
+        return cls(llm=llm, profile=profile, db_path=db_path, profile_path=profile_path, auto_sync=auto_sync)
 
     # ------------------------------------------------------------------
     # Session lifecycle
@@ -875,7 +880,7 @@ class ClimbingCoach:
                     "No profile loaded. Run an onboarding session first, "
                     "or load a profile with ClimberProfile.load()."
                 )
-            if self._stats_builder:
+            if self._stats_builder and self.auto_sync:
                 self.collector.sync_from_profile(self.profile)
             stats = self._build_stats()
             system = self.prompt_builder.coaching_system(self.profile, stats)
@@ -901,6 +906,12 @@ class ClimbingCoach:
             raise RuntimeError("Call start_session() before chat().")
         return self.llm.chat(message)
 
+    def sync_now(self) -> None:
+        """Manually trigger a sync, regardless of auto_sync setting."""
+        if not self._stats_builder or not self.profile:
+            raise RuntimeError("No collector/profile configured — cannot sync.")
+        self.collector.sync_from_profile(self.profile)
+        log.info("Manual sync triggered for user %s", self.profile.sboulder_user_id)
     # ------------------------------------------------------------------
     # Onboarding extraction
     # ------------------------------------------------------------------
