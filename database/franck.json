@@ -1,0 +1,45 @@
+{
+  "sboulder_user_id": "",
+  "name": null,
+  "gyms": ["arkose/montmartre"],
+  "age": 25,
+  "height_cm": 170,
+  "wingspan_cm": 178,
+  "weight_kg": 60,
+  "years_climbing": 2,
+  "started_at_grade": "4/5",
+  "current_redpoint_grade": null,
+  "current_flash_grade": null,
+  "preferred_styles": [
+    "technique",
+    "dalle",
+    "jet�s horizontaux",
+    "r�glettes"
+  ],
+  "self_strengths": [
+    "explosivit�",
+    "�quilibre",
+    "souplesse"
+  ],
+  "self_weaknesses": [
+    "jet�s horizontaux (vers les c�t�s)",
+    "blocs avec des plats",
+    "blocs tr�s physiques"
+  ],
+  "gym_sessions_per_week": 3,
+  "other_activities": [
+    "course � pied"
+  ],
+  "typical_session_duration_min": 180,
+  "home_setup": [],
+  "injuries": [],
+  "short_term_goals": [
+    "progresser techniquement sur les points faibles",
+    "viser le niveau violet chez Arkose"
+  ],
+  "long_term_goals": [],
+  "coach_tone": "encouraging",
+  "coach_language": "fr",
+  "focus_preference": "balanced",
+  "notes": ""
+}
