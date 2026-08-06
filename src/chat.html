@@ -18,9 +18,18 @@
     #inputBar { position: fixed; bottom: 0; left: 0; right: 0; display: flex; padding: 10px; background: #111; }
     #msgInput { flex: 1; padding: 12px; border-radius: 20px; border: none; font-size: 16px; }
     #sendBtn { margin-left: 8px; padding: 12px 18px; border-radius: 20px; border: none; background: #2563eb; color: white; }
+    #topBar { position: fixed; top: 0; left: 0; right: 0; display: flex; justify-content: flex-end; padding: 8px 12px; background: #111; z-index: 10; }
+    #syncBtn { padding: 6px 12px; border-radius: 14px; border: none; background: #2a2a2a; color: #eee; font-size: 13px; }
+    #syncBtn:disabled { opacity: 0.5; }
+    #chat { padding-top: 48px; }
+    #lastSync { font-size: 12px; color: #888; margin-right: 10px; align-self: center; }
   </style>
 </head>
 <body>
+  <div id="topBar">
+    <span id="lastSync"></span>
+    <button id="syncBtn">🔄 Synchroniser</button>
+  </div>
   <div id="chat"></div>
   <div id="inputBar">
     <input id="msgInput" placeholder="Écris à ton coach..." />
@@ -30,6 +39,16 @@
 <script>
 let sessionId = null;
 const chatEl = document.getElementById("chat");
+
+function formatLastSync(iso) {
+  if (!iso) return "Jamais synchronisé";
+  const d = new Date(iso);
+  return "Dernière sync : " + d.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function updateLastSync(iso) {
+  document.getElementById("lastSync").textContent = formatLastSync(iso);
+}
 
 function addMsg(text, who) {
   const div = document.createElement("div");
@@ -47,6 +66,7 @@ async function startSession() {
   const res = await fetch("/session/start", { method: "POST" });
   const data = await res.json();
   sessionId = data.session_id;
+  updateLastSync(data.last_sync);
   addMsg(data.reply, "coach");
 }
 
@@ -65,6 +85,29 @@ async function sendMessage() {
   addMsg(data.reply || data.error, "coach");
 }
 
+async function syncNow() {
+  const btn = document.getElementById("syncBtn");
+  btn.disabled = true;
+  btn.textContent = "Synchronisation...";
+  try {
+    const res = await fetch("/session/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId })
+    });
+    const data = await res.json();
+    btn.textContent = res.ok ? "✅ Synchronisé" : "❌ Erreur";
+    if (res.ok) updateLastSync(data.last_sync);
+  } catch (e) {
+    btn.textContent = "❌ Erreur";
+  }
+  setTimeout(() => {
+    btn.textContent = "🔄 Synchroniser";
+    btn.disabled = false;
+  }, 2000);
+}
+
+document.getElementById("syncBtn").onclick = syncNow;
 document.getElementById("sendBtn").onclick = sendMessage;
 document.getElementById("msgInput").addEventListener("keypress", e => {
   if (e.key === "Enter") sendMessage();
