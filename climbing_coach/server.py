@@ -5,9 +5,9 @@ from pydantic import BaseModel
 import uuid
 from typing import Optional
 
-from climbing_coach import ClimbingCoach, CoachMode
-from climber_profile import ClimberProfile
-from sboulder_collector import setup_logging
+from src.climbing_coach import ClimbingCoach, CoachMode
+from src.climber_profile import ClimberProfile
+from src.sboulder_collector import setup_logging
 
 setup_logging()
 app = FastAPI()

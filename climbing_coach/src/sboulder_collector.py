@@ -30,7 +30,7 @@ from typing import Optional
 
 import websocket  # websocket-client
 
-from climber_profile import Injury, ClimberProfile  # noqa: F401
+from .climber_profile import Injury, ClimberProfile  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -158,6 +158,9 @@ def route_type_category(type_id: int) -> Optional["RouteTypeInfo"]:
         return None
     return ROUTE_TYPES_BY_ID.get(rt.parent_id)
 
+def sboulder_url(gym: str, boulder_id: str) -> str:
+    return f"https://www.sboulder.com/{gym}?b={boulder_id}"
+
 @dataclass(frozen=True)
 class GradeInfo:
     color_code: int      # holds_color value (3-8)
@@ -185,6 +188,25 @@ def decode_grade(holds_color: int, grade: str, lang: str = "fr") -> str:
     unit = "barre" if lang == "fr" and grade == "1" else ("barres" if lang == "fr" else ("bar" if grade == "1" else "bars"))
     return f"{color} {grade} {unit}"
 
+COLOR_TO_CODE_FR = {info.color_fr: code for code, info in GRADE_COLORS.items()}
+
+def encode_grade_level(label: str) -> Optional[tuple[int, int]]:
+    """
+    Parse a label like 'rouge 4 barres' back into (holds_color, grade).
+    Returns None if unparseable (e.g. vague labels like 'rouge ou noir').
+    """
+    parts = label.strip().lower().split()
+    if len(parts) < 2:
+        return None
+    color = parts[0]
+    try:
+        grade = int(parts[1])
+    except ValueError:
+        return None
+    code = COLOR_TO_CODE_FR.get(color)
+    if code is None:
+        return None
+    return (code, grade)
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
@@ -885,17 +907,16 @@ class SBoulderCollector:
 
             # Track personal ascents if a user_id is configured
             if self.user_id:
-                if b.is_sent_by(self.user_id):
-                    if self.db.record_ascent(b.boulder_id, self.user_id, "send", now):
-                        log.info("  [SEND]   %s grade=%s (newly detected)",
-                                 b.boulder_id, b.grade)
-                        result.newly_sent.append(b)
-
                 if b.is_flashed_by(self.user_id):
                     if self.db.record_ascent(b.boulder_id, self.user_id, "flash", now):
-                        log.info("  [FLASH]  %s grade=%s (newly detected)",
-                                 b.boulder_id, b.grade)
+                        log.info("  [FLASH]  %s grade=%s (newly detected)", b.boulder_id, b.grade)
+                        print("flashed : ", b.boulder_id, b.grade)
                         result.newly_flashed.append(b)
+                elif b.is_sent_by(self.user_id):
+                    if self.db.record_ascent(b.boulder_id, self.user_id, "send", now):
+                        log.info("  [SEND]   %s grade=%s (newly detected)", b.boulder_id, b.grade)
+                        result.newly_sent.append(b)
+                        print("sent : ", b.boulder_id, b.grade)
 
         # Close boulders that were open in DB but absent from this sync's batch
         # Safety guard: skip closing logic if this sync looks incomplete

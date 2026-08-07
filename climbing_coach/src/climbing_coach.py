@@ -40,8 +40,8 @@ from typing import Optional
 
 from openai import OpenAI
 
-from climber_profile import ClimberProfile, Injury
-from sboulder_collector import SBoulderCollector, ROUTE_TYPES_BY_ID, ROUTE_TYPE_LEAF_IDS, decode_grade
+from .climber_profile import ClimberProfile, Injury
+from .sboulder_collector import SBoulderCollector, ROUTE_TYPES_BY_ID, ROUTE_TYPE_LEAF_IDS, decode_grade, sboulder_url, encode_grade_level
 
 log = logging.getLogger("climbing_coach")
 log.addHandler(logging.NullHandler())
@@ -137,6 +137,9 @@ class ClimbingStats:
     # list of (boulder_id, grade, sents_count, comment_texts)
     commented_projects: list[dict] = field(default_factory=list)
 
+    # Individual open, unsent boulders with full detail (for direct recommendations)
+    unsent_boulders: list[dict] = field(default_factory=list)
+
     @property
     def weakest_route_types(self) -> list[RouteTypeStat]:
         """Leaf types with at least 3 total boulders, sorted by send rate asc."""
@@ -196,22 +199,31 @@ class ClimbingStats:
             )
             lines.append(f"- **Blocs ouverts non envoyés** : {unsent_str}")
 
+        # Individual unsent boulders with links (candidate list for recommendations)
+        if self.unsent_boulders:
+            lines.append("- **Voies ouvertes non envoyées (détail)** :")
+            for b in self.unsent_boulders[:10]:
+                rarity = f"{b['sents_count']} envois salle"
+                lines.append(f"  - {b['grade']} — {b['url']} ({rarity})")
+                for c in b["comments"][:1]:  # 1 seul commentaire ici, info secondaire
+                    lines.append(f'    > commentaire communauté (info, pas un critère) : "{c}"')
+    
         # Recent ascents with community context
         if self.recent_ascents:
             lines.append("- **Derniers envois** :")
             for a in self.recent_ascents[:max_recent]:
                 lines.append(f"  - {a}")
                 for comment in a.comments[:2]:  # max 2 comments per ascent
-                    lines.append(f'    > "{comment}"')
+                    lines.append(f'    > commentaire communauté : "{comment}"')
 
-        # Commented projects (unsent boulders with community feedback)
-        if self.commented_projects:
-            lines.append("- **Projets avec commentaires communautaires** :")
-            for p in self.commented_projects[:5]:
-                rarity = f"{p['sents_count']} envois salle"
-                lines.append(f"  - {p['grade'] or '?'} ({rarity}) :")
-                for c in p["comments"][:2]:
-                    lines.append(f'    > "{c}"')
+        # # Commented projects (unsent boulders with community feedback)
+        # if self.commented_projects:
+        #     lines.append("- **Projets avec commentaires communautaires** :")
+        #     for p in self.commented_projects[:5]:
+        #         rarity = f"{p['sents_count']} envois salle"
+        #         lines.append(f"  - {p['grade'] or '?'} ({rarity}) :")
+        #         for c in p["comments"][:2]:
+        #             lines.append(f'    > commentaire communauté : "{c}"')
 
         # Last sync
         if self.last_sync:
@@ -244,6 +256,7 @@ class StatsBuilder:
         user_id: str,
         gyms: Optional[list[str]] = None,
         recent_n: int = 10,
+        min_level: Optional[tuple[int, int]] = None,
     ) -> ClimbingStats:
         """
         Build a full ClimbingStats for user_id.
@@ -274,6 +287,9 @@ class StatsBuilder:
 
         # Unsent open boulders
         stats.unsent_by_grade = self._unsent_by_grade(sent_ids, gyms)
+
+        # Unsent open boulders (individual, with url — new candidate for recommendations)
+        stats.unsent_boulders = self._unsent_boulders(sent_ids, gyms, min_level=min_level)
 
         # Commented projects — unsent boulders that have community text comments
         stats.commented_projects = self._commented_projects(sent_ids, gyms)
@@ -484,6 +500,44 @@ class StatsBuilder:
             })
         return result
 
+    def _unsent_boulders(
+        self, sent_ids: set[str], gyms: list[str],
+        min_level: Optional[tuple[int, int]] = None,
+        limit: int = 15
+    ) -> list[dict]:
+        gym_placeholders = ",".join("?" * len(gyms))
+        rows = self._conn.execute(
+            f"""SELECT b.boulder_id, b.gym, b.holds_color, b.grade, b.sents_count, b.flashes_count
+               FROM boulders b
+               WHERE b.gym IN ({gym_placeholders})
+                 AND (closed_at IS NULL OR closed_at > ?)
+                 AND b.grade IS NOT NULL AND b.holds_color IS NOT NULL
+               ORDER BY b.sents_count DESC""",
+            (*gyms, _now_iso()),
+        ).fetchall()
+
+        result = []
+        print(repr(self.profile.current_flash_level_arkose))
+        print(repr(encode_grade_level(self.profile.current_flash_level_arkose)))
+        for r in rows:
+            if r["boulder_id"] in sent_ids:
+                continue
+            if min_level:
+                color, grade = r["holds_color"], int(r["grade"])
+                if (color, grade) < min_level:
+                    continue
+            result.append({
+                "boulder_id":    r["boulder_id"],
+                "grade":         decode_grade(r["holds_color"], r["grade"]),
+                "url":           sboulder_url(r["gym"], r["boulder_id"]),
+                "sents_count":   r["sents_count"] or 0,
+                "flashes_count": r["flashes_count"] or 0,
+                "comments":      self._boulder_comments(r["boulder_id"]),
+            })
+            if len(result) >= limit:
+                break
+        return result
+    
     def _last_sync(self, gym: str) -> Optional[str]:
         row = self._conn.execute(
             "SELECT synced_at FROM sync_log WHERE gym=? ORDER BY id DESC LIMIT 1",
@@ -562,8 +616,9 @@ commence toujours par les mentionner naturellement avant d'aller plus loin.
 les axes de progression prioritaires
 - Tiens compte du nombre d'envois salle sur chaque bloc : un bloc envoyé par peu de grimpeurs \
 est un vrai exploit, dis-le
-- Les commentaires de la communauté sur les projets sont de l'or : \
-utilise-les pour donner des conseils concrets sur la méthode
+- Les commentaires affichés viennent TOUJOURS de la communauté, jamais du grimpeur \
+lui-même. Ne jamais dire "tu soulignais" ou "comme tu l'as dit" à propos d'un commentaire — \
+dis plutôt "un grimpeur a noté que..." ou "la communauté mentionne...".
 
 ## Message d'accueil
 Quand le grimpeur arrive en session, commence par un recap court mais précis de sa situation \
@@ -583,6 +638,10 @@ Termine en évoquant, sans les détailler, qu'il y a des pistes de travail possi
 (une phrase suffit, du type "on pourrait creuser deux ou trois pistes aujourd'hui"). \
 Ne développe jamais ces pistes toi-même à ce stade — laisse le grimpeur choisir la direction \
 qu'il veut prendre.
+Évite les formulations "soit... soit..." ou les listes à choix multiples déguisées en phrase. \
+Parle comme un humain qui a vraiment regardé les stats, pas comme un menu. Une seule piste \
+suggérée avec conviction vaut mieux que deux options neutres jetées côte à côte. \
+Pas plus d'un emoji dans tout le message, et seulement s'il apporte vraiment quelque chose.
 """
 
     # ------------------------------------------------------------------
@@ -605,9 +664,11 @@ Retourne UNIQUEMENT un objet JSON valide avec les champs suivants \
   "wingspan_cm": int,
   "weight_kg": float,
   "years_climbing": float,
-  "started_at_grade": string,
-  "current_redpoint_grade": string,
-  "current_flash_grade": string,
+  "started_at_level": string,
+  "current_redpoint_grade_fr": string,
+  "current_flash_grade_fr": string,
+  "current_redpoint_level_arkose": string,
+  "current_flash_level_arkose": string,
   "preferred_styles": [string],
   "self_strengths": [string],
   "self_weaknesses": [string],
@@ -756,7 +817,7 @@ class LLMClient:
     # ------------------------------------------------------------------
 
     @classmethod
-    def mistral(cls, api_key: str, model: str = "mistral-small-latest", **kwargs) -> "LLMClient":
+    def mistral(cls, api_key: str, model: str = "mistral-large-latest", **kwargs) -> "LLMClient":
         return cls(
             api_key=api_key,
             base_url="https://api.mistral.ai/v1",
@@ -965,9 +1026,15 @@ class ClimbingCoach:
     def _build_stats(self) -> Optional[ClimbingStats]:
         if not self._stats_builder or not self.profile or not self.profile.sboulder_user_id:
             return None
+        
+        min_level = None
+        if self.profile.current_flash_level_arkose:
+            min_level = encode_grade_level(self.profile.current_flash_level_arkose)
+
         return self._stats_builder.build(
             user_id=self.profile.sboulder_user_id,
             gyms=self.profile.gyms or None,
+            min_level=min_level
         )
 
     def _history_to_transcript(self) -> str:
