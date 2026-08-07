@@ -159,7 +159,8 @@ def route_type_category(type_id: int) -> Optional["RouteTypeInfo"]:
     return ROUTE_TYPES_BY_ID.get(rt.parent_id)
 
 def sboulder_url(gym: str, boulder_id: str) -> str:
-    return f"https://www.sboulder.com/{gym}?b={boulder_id}"
+    slug = gym.split("/")[-1]  # "arkose/montmartre" -> "montmartre"
+    return f"https://plus.arkose.com/{slug}?b={boulder_id}"
 
 @dataclass(frozen=True)
 class GradeInfo:
