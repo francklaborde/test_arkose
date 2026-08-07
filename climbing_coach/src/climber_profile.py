@@ -166,9 +166,11 @@ class ClimberProfile:
             "wingspan_cm": self.wingspan_cm,
             "weight_kg": self.weight_kg,
             "years_climbing": self.years_climbing,
-            "started_at_grade": self.started_at_grade,
-            "current_redpoint_grade": self.current_redpoint_grade,
-            "current_flash_grade": self.current_flash_grade,
+            "started_at_level": self.started_at_level,
+            "current_redpoint_grade_fr": self.current_redpoint_grade_fr,
+            "current_flash_grade_fr": self.current_flash_grade_fr,
+            "current_redpoint_level_arkose": self.current_redpoint_level_arkose,
+            "current_flash_level_arkose": self.current_flash_level_arkose,
             "preferred_styles": self.preferred_styles,
             "self_strengths": self.self_strengths,
             "self_weaknesses": self.self_weaknesses,
@@ -285,12 +287,16 @@ class ClimberProfile:
 
         # Climbing level
         _add("Années de grimpe", self.years_climbing)
-        _add("Grade de départ", self.started_at_grade)
+        _add("Grade de départ", self.started_at_level)
         level_parts = []
-        if self.current_redpoint_grade:
-            level_parts.append(f"redpoint {self.current_redpoint_grade}")
-        if self.current_flash_grade:
-            level_parts.append(f"flash {self.current_flash_grade}")
+        if self.current_redpoint_grade_fr:
+            level_parts.append(f"redpoint cotation fr {self.current_redpoint_grade_fr}")
+        if self.current_redpoint_level_arkose:
+                    level_parts.append(f"redpoint level arkose {self.current_redpoint_level_arkose}")
+        if self.current_flash_grade_fr:
+            level_parts.append(f"flash {self.current_flash_grade_fr}")
+        if self.current_flash_level_arkose:
+            level_parts.append(f"flash {self.current_flash_level_arkose}")
         _add("Niveau actuel", ", ".join(level_parts) if level_parts else None)
         _add("Styles préférés", ", ".join(self.preferred_styles) if self.preferred_styles else None)
 
