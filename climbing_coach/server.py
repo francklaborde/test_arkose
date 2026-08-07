@@ -74,5 +74,23 @@ def index():
     with open("chat.html", encoding="utf-8") as f:
         return f.read()
 
+@app.get("/session/stats")
+def get_stats(session_id: str):
+    coach = sessions.get(session_id)
+    if not coach:
+        raise HTTPException(status_code=404, detail="Session not found")
+    stats = coach.get_stats()
+    if not stats:
+        raise HTTPException(status_code=404, detail="No stats available")
+    return {
+        "current_level": stats.current_level,
+        "current_flash_level": stats.current_flash_level,
+        "total_sends": stats.total_sends,
+        "total_flashes": stats.total_flashes,
+        "sends_by_grade": stats.sends_by_grade,
+        "flashes_by_grade": stats.flashes_by_grade,
+        "last_sync": _get_last_sync(coach),
+    }
+
 # --- Serve manifest.json, sw.js, icons, etc. at root paths ---
 app.mount("/", StaticFiles(directory=Path(__file__).parent), name="static")

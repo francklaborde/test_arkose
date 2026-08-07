@@ -12,133 +12,56 @@
   <link rel="apple-touch-icon" href="/icon-192.png">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
   <style>
-    :root {
-      --bg: #0d0f14;
-      --bg-elevated: #161923;
-      --border: #262b3a;
-      --text: #eef0f5;
-      --text-dim: #8b90a3;
-      --accent: #5b7cfa;
-      --accent-2: #7c5bfa;
-      --coach-bubble: #1a1e2b;
-      --safe-bottom: env(safe-area-inset-bottom, 0px);
-      --safe-top: env(safe-area-inset-top, 0px);
-    }
-    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-    html, body { height: 100%; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      margin: 0; padding: 0;
-      background: var(--bg);
-      color: var(--text);
-      overscroll-behavior-y: none;
-    }
-    #chat {
-      padding: 16px 14px;
-      padding-top: calc(56px + var(--safe-top));
-      padding-bottom: calc(96px + var(--safe-bottom));
-      display: flex;
-      flex-direction: column;
-      min-height: 100vh;
-    }
-    .msg {
-      margin: 6px 0;
-      padding: 11px 15px;
-      border-radius: 18px;
-      max-width: 82%;
-      line-height: 1.45;
-      font-size: 15px;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.25);
-      animation: msgIn 0.22s ease-out;
-      word-wrap: break-word;
-    }
-    @keyframes msgIn {
-      from { opacity: 0; transform: translateY(6px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
+    body { font-family: -apple-system, sans-serif; margin: 0; padding: 0; background: #111; color: #eee; }
+    #chat { padding: 12px; padding-bottom: 90px; }
+    .msg { margin: 8px 0; padding: 10px 14px; border-radius: 14px; max-width: 80%; line-height: 1.4; }
     .msg p { margin: 0 0 8px 0; }
     .msg p:last-child { margin-bottom: 0; }
     .msg ul, .msg ol { margin: 4px 0; padding-left: 20px; }
-    .msg code { background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 5px; font-size: 0.9em; }
     .msg strong { color: #fff; }
-    .user {
-      background: linear-gradient(135deg, var(--accent), var(--accent-2));
-      color: #fff;
-      margin-left: auto;
-      border-bottom-right-radius: 5px;
-    }
-    .coach {
-      background: var(--coach-bubble);
-      border: 1px solid var(--border);
-      margin-right: auto;
-      border-bottom-left-radius: 5px;
-    }
-    .typing { display: flex; align-items: center; gap: 4px; padding: 14px 16px; }
-    .typing span {
-      width: 6px; height: 6px; border-radius: 50%;
-      background: var(--text-dim);
-      animation: bounce 1.2s infinite ease-in-out;
-    }
-    .typing span:nth-child(2) { animation-delay: 0.15s; }
-    .typing span:nth-child(3) { animation-delay: 0.3s; }
-    @keyframes bounce {
-      0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
-      30% { transform: translateY(-4px); opacity: 1; }
-    }
-    #topBar {
-      position: fixed; top: 0; left: 0; right: 0;
-      display: flex; align-items: center; justify-content: space-between;
-      padding: calc(10px + var(--safe-top)) 14px 10px;
-      background: rgba(13, 15, 20, 0.85);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      border-bottom: 1px solid var(--border);
-      z-index: 10;
-    }
-    #title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
-    #topRight { display: flex; align-items: center; gap: 10px; }
-    #lastSync { font-size: 11px; color: var(--text-dim); }
-    #syncBtn {
-      padding: 6px 13px; border-radius: 14px; border: 1px solid var(--border);
-      background: var(--bg-elevated); color: var(--text); font-size: 13px;
-      transition: opacity 0.15s ease;
-    }
-    #syncBtn:active { opacity: 0.7; }
+    .user { background: #2563eb; margin-left: auto; }
+    .coach { background: #2a2a2a; }
+    #inputBar { position: fixed; bottom: 0; left: 0; right: 0; display: flex; padding: 10px; background: #111; }
+    #msgInput { flex: 1; padding: 12px; border-radius: 20px; border: none; font-size: 16px; }
+    #sendBtn { margin-left: 8px; padding: 12px 18px; border-radius: 20px; border: none; background: #2563eb; color: white; }
+    #topBar { position: fixed; top: 0; left: 0; right: 0; display: flex; justify-content: flex-end; padding: 8px 12px; background: #111; z-index: 10; }
+    #syncBtn { padding: 6px 12px; border-radius: 14px; border: none; background: #2a2a2a; color: #eee; font-size: 13px; }
     #syncBtn:disabled { opacity: 0.5; }
-    #inputBar {
-      position: fixed; bottom: 0; left: 0; right: 0;
-      display: flex; gap: 8px;
-      padding: 10px 12px calc(10px + var(--safe-bottom));
-      background: linear-gradient(to top, var(--bg) 60%, transparent);
-    }
-    #msgInput {
-      flex: 1; padding: 12px 16px; border-radius: 22px; border: 1px solid var(--border);
-      background: var(--bg-elevated); color: var(--text); font-size: 16px; outline: none;
-      transition: border-color 0.15s ease;
-    }
-    #msgInput:focus { border-color: var(--accent); }
-    #msgInput::placeholder { color: var(--text-dim); }
-    #sendBtn {
-      padding: 12px 20px; border-radius: 22px; border: none;
-      background: linear-gradient(135deg, var(--accent), var(--accent-2));
-      color: white; font-weight: 600; font-size: 15px;
-      transition: transform 0.1s ease, opacity 0.1s ease;
-    }
-    #sendBtn:active { transform: scale(0.96); }
-    #sendBtn:disabled { opacity: 0.5; }
+    #chat { padding-top: 48px; }
+    #lastSync { font-size: 12px; color: #888; margin-right: 10px; align-self: center; }
+
+    #topBar { justify-content: space-between; align-items: center; }
+    #tabs { display: flex; gap: 4px; }
+    .tabBtn { padding: 6px 14px; border-radius: 14px; border: none; background: transparent; color: #888; font-size: 14px; }
+    .tabBtn.active { background: #2a2a2a; color: #eee; }
+    #topBarRight { display: flex; align-items: center; }
+
+    #statsView { display: none; padding: 60px 16px 90px; }
+    .levelCard { background: #2a2a2a; border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+    .levelCard .label { font-size: 13px; color: #888; margin-bottom: 4px; }
+    .levelCard .value { font-size: 20px; font-weight: 600; }
+    .statRow { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #222; font-size: 14px; }
+    .statRow:last-child { border-bottom: none; }
+    #statsEmpty { color: #888; text-align: center; margin-top: 40px; }
   </style>
 </head>
 <body>
   <div id="topBar">
-    <span id="title">🧗 Climbing Coach</span>
-    <div id="topRight">
+    <div id="tabs">
+      <button class="tabBtn active" id="tabChat">Chat</button>
+      <button class="tabBtn" id="tabStats">Stats</button>
+    </div>
+    <div id="topBarRight">
       <span id="lastSync"></span>
       <button id="syncBtn">🔄 Synchroniser</button>
     </div>
   </div>
   <div id="chat"></div>
+  <div id="statsView">
+    <div id="statsEmpty">Chargement...</div>
+  </div>
   <div id="inputBar">
-    <input id="msgInput" placeholder="Écris à ton coach..." autocomplete="off" />
+    <input id="msgInput" placeholder="Écris à ton coach..." />
     <button id="sendBtn">Envoyer</button>
   </div>
 
@@ -218,6 +141,78 @@ document.getElementById("sendBtn").onclick = sendMessage;
 document.getElementById("msgInput").addEventListener("keypress", e => {
   if (e.key === "Enter") sendMessage();
 });
+
+// --- Stats tab ---
+let statsLoaded = false;
+
+function gradeTableHtml(byGrade) {
+  const entries = Object.entries(byGrade || {});
+  if (!entries.length) return "<div class='statRow'><span>Aucune donnée</span></div>";
+  return entries.map(([grade, count]) =>
+    `<div class="statRow"><span>${grade}</span><span>${count}</span></div>`
+  ).join("");
+}
+
+function renderStats(data) {
+  const el = document.getElementById("statsView");
+  el.innerHTML = `
+    <div class="levelCard">
+      <div class="label">Niveau actuel (redpoint)</div>
+      <div class="value">${data.current_level || "Pas encore assez de données"}</div>
+    </div>
+    <div class="levelCard">
+      <div class="label">Niveau actuel (flash)</div>
+      <div class="value">${data.current_flash_level || "Pas encore assez de données"}</div>
+    </div>
+    <div class="levelCard">
+      <div class="label">Total</div>
+      <div class="value">${data.total_sends} envois · ${data.total_flashes} flashs</div>
+    </div>
+    <div class="levelCard">
+      <div class="label">Répartition par niveau (envois)</div>
+      ${gradeTableHtml(data.sends_by_grade)}
+    </div>
+    <div class="levelCard">
+      <div class="label">Répartition par niveau (flashs)</div>
+      ${gradeTableHtml(data.flashes_by_grade)}
+    </div>
+  `;
+}
+
+async function loadStats() {
+  const el = document.getElementById("statsView");
+  el.innerHTML = "<div id='statsEmpty'>Chargement...</div>";
+  try {
+    const res = await fetch(`/session/stats?session_id=${sessionId}`);
+    if (!res.ok) throw new Error("bad response");
+    const data = await res.json();
+    renderStats(data);
+  } catch (e) {
+    el.innerHTML = "<div id='statsEmpty'>❌ Impossible de charger les stats</div>";
+  }
+}
+
+function showTab(tab) {
+  const chatEl2 = document.getElementById("chat");
+  const statsEl = document.getElementById("statsView");
+  const inputBar = document.getElementById("inputBar");
+  document.getElementById("tabChat").classList.toggle("active", tab === "chat");
+  document.getElementById("tabStats").classList.toggle("active", tab === "stats");
+
+  if (tab === "chat") {
+    chatEl2.style.display = "block";
+    inputBar.style.display = "flex";
+    statsEl.style.display = "none";
+  } else {
+    chatEl2.style.display = "none";
+    inputBar.style.display = "none";
+    statsEl.style.display = "block";
+    loadStats();
+  }
+}
+
+document.getElementById("tabChat").onclick = () => showTab("chat");
+document.getElementById("tabStats").onclick = () => showTab("stats");
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js");
