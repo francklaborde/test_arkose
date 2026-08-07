@@ -99,7 +99,7 @@ class RecentAscent:
         kind = "flashé" if self.ascent_type == "flash" else "envoyé"
         label = decode_grade(self.holds_color, self.grade) if self.holds_color else (self.grade or "?")
         types = f" [{', '.join(self.route_type_labels)}]" if self.route_type_labels else ""
-        rarity = f" — {self.sents_count} envois salle" if self.sents_count else ""
+        rarity = f"réussie par {self.sents_count} grimpeur(s) en salle" if self.sents_count else "aucun envoi salle enregistré"
         return f"{label} {kind}{types}{rarity} ({self.detected_at[:10]})"
 
 
@@ -192,21 +192,22 @@ class ClimbingStats:
             for s in strong:
                 lines.append(f"  - {s}")
 
-        # Unsent boulders still open
-        if self.unsent_by_grade:
-            unsent_str = ", ".join(
-                f"{g}: {c}" for g, c in sorted(self.unsent_by_grade.items())
-            )
-            lines.append(f"- **Blocs ouverts non envoyés** : {unsent_str}")
+        # # Unsent boulders still open
+        # if self.unsent_by_grade:
+        #     unsent_str = ", ".join(
+        #         f"{g}: {c}" for g, c in sorted(self.unsent_by_grade.items())
+        #     )
+        #     lines.append(f"- **Blocs ouverts non envoyés** : {unsent_str}")
 
         # Individual unsent boulders with links (candidate list for recommendations)
         if self.unsent_boulders:
             lines.append("- **Voies ouvertes non envoyées (détail)** :")
-            for b in self.unsent_boulders[:10]:
-                rarity = f"{b['sents_count']} envois salle"
-                lines.append(f"  - {b['grade']} — {b['url']} ({rarity})")
-                for c in b["comments"][:1]:  # 1 seul commentaire ici, info secondaire
-                    lines.append(f'    > commentaire communauté (info, pas un critère) : "{c}"')
+            for b in self.unsent_boulders[:25]:
+                types = f" [{', '.join(b['route_types'])}]" if b['route_types'] else ""
+                rarity = f"réussie par {b['sents_count']} grimpeur(s) en salle" if b['sents_count'] else "aucun envoi salle enregistré"
+                lines.append(f"  - {b['grade']}{types} — {b['url']} ({rarity})")
+                # for c in b["comments"][:1]:  # 1 seul commentaire ici, info secondaire
+                #     lines.append(f'    > commentaire communauté (info, pas un critère) : "{c}"')
     
         # Recent ascents with community context
         if self.recent_ascents:
@@ -503,11 +504,12 @@ class StatsBuilder:
     def _unsent_boulders(
         self, sent_ids: set[str], gyms: list[str],
         min_level: Optional[tuple[int, int]] = None,
-        limit: int = 15
+        limit: int = 25
     ) -> list[dict]:
         gym_placeholders = ",".join("?" * len(gyms))
         rows = self._conn.execute(
-            f"""SELECT b.boulder_id, b.gym, b.holds_color, b.grade, b.sents_count, b.flashes_count
+            f"""SELECT b.boulder_id, b.gym, b.holds_color, b.grade,
+                       b.route_types, b.sents_count, b.flashes_count
                FROM boulders b
                WHERE b.gym IN ({gym_placeholders})
                  AND (closed_at IS NULL OR closed_at > ?)
@@ -517,8 +519,6 @@ class StatsBuilder:
         ).fetchall()
 
         result = []
-        print(repr(self.profile.current_flash_level_arkose))
-        print(repr(encode_grade_level(self.profile.current_flash_level_arkose)))
         for r in rows:
             if r["boulder_id"] in sent_ids:
                 continue
@@ -526,13 +526,24 @@ class StatsBuilder:
                 color, grade = r["holds_color"], int(r["grade"])
                 if (color, grade) < min_level:
                     continue
+
+            try:
+                type_ids: list[int] = json.loads(r["route_types"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                type_ids = []
+            labels = [
+                ROUTE_TYPES_BY_ID[t].label_fr
+                for t in type_ids
+                if t in ROUTE_TYPES_BY_ID and not ROUTE_TYPES_BY_ID[t].is_category
+            ]
+
             result.append({
                 "boulder_id":    r["boulder_id"],
                 "grade":         decode_grade(r["holds_color"], r["grade"]),
                 "url":           sboulder_url(r["gym"], r["boulder_id"]),
+                "route_types":   labels,
                 "sents_count":   r["sents_count"] or 0,
                 "flashes_count": r["flashes_count"] or 0,
-                "comments":      self._boulder_comments(r["boulder_id"]),
             })
             if len(result) >= limit:
                 break
