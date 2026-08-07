@@ -86,12 +86,20 @@ class ClimberProfile:
 
     # ---- Climbing history ------------------------------------------------
     years_climbing: Optional[float] = None
-    started_at_grade: Optional[str] = None
-    # Grade (Fontainebleau) when they first started, e.g. "5b"
-    current_redpoint_grade: Optional[str] = None
-    # Max grade sent after multiple attempts
-    current_flash_grade: Optional[str] = None
-    # Max grade sent first try
+
+    # Niveau de départ (souvent approximatif) — texte libre en couleurs Arkose,
+    # ex: "rouge ou noir", ou précis si connu, ex: "vert 3 barres"
+    started_at_level: Optional[str] = None
+
+    # Cotation française (Fontainebleau), précise si connue
+    current_redpoint_grade_fr: Optional[str] = None   # ex: "6a+"
+    current_flash_grade_fr: Optional[str] = None      # ex: "6a"
+
+    # Niveau Arkose correspondant, précis (couleur + barres) — sert à comparer
+    # directement avec les voies proposées par StatsBuilder
+    current_redpoint_level_arkose: Optional[str] = None  # ex: "rouge 3 barres"
+    current_flash_level_arkose: Optional[str] = None     # ex: "rouge 2 barres"
+
     preferred_styles: list[str] = field(default_factory=list)
     # Free text, used verbatim in the prompt
     # e.g. ["powerful", "dynamic", "compression", "slab"]
@@ -188,9 +196,11 @@ class ClimberProfile:
             wingspan_cm=d.get("wingspan_cm"),
             weight_kg=d.get("weight_kg"),
             years_climbing=d.get("years_climbing"),
-            started_at_grade=d.get("started_at_grade"),
-            current_redpoint_grade=d.get("current_redpoint_grade"),
-            current_flash_grade=d.get("current_flash_grade"),
+            started_at_level=d.get("started_at_level"),
+            current_redpoint_grade_fr=d.get("current_redpoint_grade_fr"),
+            current_flash_grade_fr=d.get("current_flash_grade_fr"),
+            current_redpoint_level_arkose=d.get("current_redpoint_level_arkose"),
+            current_flash_level_arkose=d.get("current_flash_level_arkose"),
             preferred_styles=d.get("preferred_styles", []),
             self_strengths=d.get("self_strengths", []),
             self_weaknesses=d.get("self_weaknesses", []),
