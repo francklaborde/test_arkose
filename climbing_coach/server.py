@@ -1,6 +1,9 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi import HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uuid
 from typing import Optional
@@ -70,3 +73,6 @@ async def sync_session(req: SyncRequest):
 def index():
     with open("chat.html", encoding="utf-8") as f:
         return f.read()
+
+# --- Serve manifest.json, sw.js, icons, etc. at root paths ---
+app.mount("/", StaticFiles(directory=Path(__file__).parent), name="static")
