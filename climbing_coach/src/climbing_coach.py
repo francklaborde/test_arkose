@@ -33,7 +33,7 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -139,6 +139,9 @@ class ClimbingStats:
 
     # Individual open, unsent boulders with full detail (for direct recommendations)
     unsent_boulders: list[dict] = field(default_factory=list)
+
+    current_level: Optional[str] = None
+    current_flash_level: Optional[str] = None
 
     @property
     def weakest_route_types(self) -> list[RouteTypeStat]:
@@ -303,6 +306,9 @@ class StatsBuilder:
                 ascent.flashes_count = row["flashes_count"] or 0
                 ascent.holds_color   = row["holds_color"]
             ascent.comments = self._boulder_comments(ascent.boulder_id)
+
+        stats.current_level       = self._current_level_arkose(user_id, "send")
+        stats.current_flash_level = self._current_level_arkose(user_id, "flash")
 
         # Last sync per gym
         stats.last_sync = {gym: self._last_sync(gym) for gym in gyms}
@@ -548,6 +554,34 @@ class StatsBuilder:
             if len(result) >= limit:
                 break
         return result
+
+    def _current_level_arkose(
+        self, user_id: str, ascent_type: str, top_n: int = 5, months: int = 12
+    ) -> Optional[str]:
+        """
+        Among the top_n hardest boulders of ascent_type ('send' or 'flash')
+        completed in the last `months` months, return the easiest one (decoded).
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=30 * months)).isoformat()
+        rows = self._conn.execute(
+            """SELECT b.holds_color, b.grade
+               FROM ascents a
+               JOIN boulders b ON a.boulder_id = b.boulder_id
+               WHERE a.user_id = ? AND a.ascent_type = ? AND a.detected_at >= ?
+                 AND b.grade IS NOT NULL AND b.holds_color IS NOT NULL""",
+            (user_id, ascent_type, cutoff),
+        ).fetchall()
+
+        if not rows:
+            return None
+
+        graded = sorted(
+            [(r["holds_color"], int(r["grade"])) for r in rows],
+            reverse=True,
+        )
+        top = graded[:top_n]
+        easiest_color, easiest_grade = top[-1]
+        return decode_grade(easiest_color, str(easiest_grade))
     
     def _last_sync(self, gym: str) -> Optional[str]:
         row = self._conn.execute(
