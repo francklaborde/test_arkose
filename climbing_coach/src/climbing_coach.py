@@ -841,6 +841,35 @@ class LLMClient:
         self._history.append({"role": "assistant", "content": reply})
         return reply
 
+    def chat_stream(self, user_message: str):
+        """
+        Send a user message, yield the assistant reply incrementally as it is
+        generated, and update history once the stream completes.
+        """
+        self._history.append({"role": "user", "content": user_message})
+
+        messages = []
+        if self._system:
+            messages.append({"role": "system", "content": self._system})
+        messages.extend(self._history)
+
+        stream = self._client.chat.completions.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            messages=messages,
+            stream=True,
+        )
+
+        chunks: list[str] = []
+        for event in stream:
+            delta = event.choices[0].delta.content
+            if delta:
+                chunks.append(delta)
+                yield delta
+
+        self._history.append({"role": "assistant", "content": "".join(chunks)})
+
     def call_once(self, system: str, user_message: str) -> str:
         """
         Single stateless call — does NOT affect history.
@@ -968,17 +997,17 @@ class ClimbingCoach:
     # Session lifecycle
     # ------------------------------------------------------------------
 
-    def start_session(self, mode: CoachMode) -> str:
+    def _prepare_session(self, mode: CoachMode) -> str:
         """
-        Reset history, set mode, build system prompt, send opening message.
-        Returns the coach's opening line.
+        Reset history, set mode, build the system prompt, and return the
+        opening trigger message. Shared by start_session() and start_session_stream().
         """
         self.mode = mode
         self.llm.reset_history()
 
         if mode == CoachMode.ONBOARDING:
             self.llm.set_system(self.prompt_builder.onboarding_system())
-            opening_trigger = "Bonjour, je voudrais créer mon profil de coaching."
+            return "Bonjour, je voudrais créer mon profil de coaching."
 
         elif mode == CoachMode.COACHING:
             if not self.profile:
@@ -996,21 +1025,36 @@ class ClimbingCoach:
             # the stats context. Let the coach decide what to highlight.
             recent_count = len(stats.recent_ascents) if stats else 0
             if recent_count:
-                opening_trigger = f"Bonjour coach, c'est {name}."
-            else:
-                opening_trigger = f"Bonjour coach, c'est {name}. Pas encore de stats disponibles."
+                return f"Bonjour coach, c'est {name}."
+            return f"Bonjour coach, c'est {name}. Pas encore de stats disponibles."
 
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
-        reply = self.llm.chat(opening_trigger)
-        return reply
+    def start_session(self, mode: CoachMode) -> str:
+        """
+        Reset history, set mode, build system prompt, send opening message.
+        Returns the coach's opening line.
+        """
+        opening_trigger = self._prepare_session(mode)
+        return self.llm.chat(opening_trigger)
+
+    def start_session_stream(self, mode: CoachMode):
+        """Same as start_session(), but yields the opening line incrementally."""
+        opening_trigger = self._prepare_session(mode)
+        yield from self.llm.chat_stream(opening_trigger)
 
     def chat(self, message: str) -> str:
         """Send a message and get the coach's reply."""
         if self.mode is None:
             raise RuntimeError("Call start_session() before chat().")
         return self.llm.chat(message)
+
+    def chat_stream(self, message: str):
+        """Send a message and yield the coach's reply incrementally."""
+        if self.mode is None:
+            raise RuntimeError("Call start_session() before chat().")
+        yield from self.llm.chat_stream(message)
 
     def sync_now(self) -> None:
         """Manually trigger a sync, regardless of auto_sync setting."""

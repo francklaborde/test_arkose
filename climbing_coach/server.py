@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi import HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -22,11 +22,6 @@ class ChatRequest(BaseModel):
     session_id: str
     message: str
 
-class StartResponse(BaseModel):
-    session_id: str
-    reply: str
-    last_sync: Optional[str] = None
-
 class SyncRequest(BaseModel):
     session_id: str
 
@@ -37,7 +32,7 @@ def _get_last_sync(coach: ClimbingCoach) -> Optional[str]:
     timestamps = [ts for ts in stats.last_sync.values() if ts]
     return max(timestamps) if timestamps else None
 
-@app.post("/session/start", response_model=StartResponse)
+@app.post("/session/start")
 def start_session():
     API_KEY = "REMOVED_API_KEY"
     session_id = str(uuid.uuid4())
@@ -47,10 +42,17 @@ def start_session():
         profile_path=r"C:\Users\Franc\OneDrive\Documents\GitHub\test_arkose\database\franck.json",
     )
     coach.profile = ClimberProfile.load(r"C:\Users\Franc\OneDrive\Documents\GitHub\test_arkose\database\franck.json")
-    opening_message = coach.start_session(CoachMode.COACHING)
     sessions[session_id] = coach
     last_sync = _get_last_sync(coach)
-    return StartResponse(session_id=session_id, reply=opening_message, last_sync=last_sync)
+    headers = {
+        "X-Session-Id": session_id,
+        "X-Last-Sync": last_sync or "",
+    }
+    return StreamingResponse(
+        coach.start_session_stream(CoachMode.COACHING),
+        media_type="text/plain",
+        headers=headers,
+    )
 
 @app.post("/session/chat")
 def chat(req: ChatRequest):
@@ -59,6 +61,13 @@ def chat(req: ChatRequest):
         return {"error": "unknown session, call /session/start first"}
     reply = coach.chat(req.message)
     return {"reply": reply}
+
+@app.post("/session/chat/stream")
+def chat_stream(req: ChatRequest):
+    coach = sessions.get(req.session_id)
+    if coach is None:
+        raise HTTPException(status_code=404, detail="unknown session, call /session/start first")
+    return StreamingResponse(coach.chat_stream(req.message), media_type="text/plain")
 
 @app.post("/session/sync")
 async def sync_session(req: SyncRequest):

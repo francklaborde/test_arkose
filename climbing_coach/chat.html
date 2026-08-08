@@ -21,6 +21,11 @@
     .msg strong { color: #fff; }
     .user { background: #2563eb; margin-left: auto; }
     .coach { background: #2a2a2a; }
+    .coach.typing { display: flex; gap: 4px; align-items: center; padding: 14px; }
+    .coach.typing .dot { width: 6px; height: 6px; border-radius: 50%; background: #888; animation: bounce 1.2s infinite; }
+    .coach.typing .dot:nth-child(2) { animation-delay: 0.15s; }
+    .coach.typing .dot:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-4px); opacity: 1; } }
     #inputBar { position: fixed; bottom: 0; left: 0; right: 0; display: flex; padding: 10px; background: #111; }
     #msgInput { flex: 1; padding: 12px; border-radius: 20px; border: none; font-size: 16px; }
     #sendBtn { margin-left: 8px; padding: 12px 18px; border-radius: 20px; border: none; background: #2563eb; color: white; }
@@ -91,27 +96,91 @@ function addMsg(text, who) {
   window.scrollTo(0, document.body.scrollHeight);
 }
 
+function addTyping() {
+  const div = document.createElement("div");
+  div.className = "msg coach typing";
+  div.innerHTML = "<span class='dot'></span><span class='dot'></span><span class='dot'></span>";
+  chatEl.appendChild(div);
+  window.scrollTo(0, document.body.scrollHeight);
+  return div;
+}
+
+// Reads a streaming text/plain response, filling a coach bubble as chunks arrive.
+// Renders plain text while streaming (partial markdown can produce broken HTML),
+// then swaps to the fully rendered markdown once the stream closes.
+async function streamIntoBubble(res, typingEl) {
+  if (!res.ok || !res.body) throw new Error("bad response");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let full = "";
+  let msgDiv = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    if (!chunk) continue;
+    if (!msgDiv) {
+      typingEl.remove();
+      msgDiv = document.createElement("div");
+      msgDiv.className = "msg coach";
+      chatEl.appendChild(msgDiv);
+    }
+    full += chunk;
+    msgDiv.textContent = full;
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  if (msgDiv) {
+    msgDiv.innerHTML = marked.parse(full);
+  } else {
+    typingEl.remove();
+    addMsg("(réponse vide)", "coach");
+  }
+}
+
 async function startSession() {
-  const res = await fetch("/session/start", { method: "POST" });
-  const data = await res.json();
-  sessionId = data.session_id;
-  updateLastSync(data.last_sync);
-  addMsg(data.reply, "coach");
+  const typingEl = addTyping();
+  try {
+    const res = await fetch("/session/start", { method: "POST" });
+    if (!res.ok) throw new Error("bad response");
+    sessionId = res.headers.get("X-Session-Id");
+    updateLastSync(res.headers.get("X-Last-Sync"));
+    await streamIntoBubble(res, typingEl);
+  } catch (e) {
+    typingEl.remove();
+    addMsg("❌ Impossible de démarrer la session, réessaie.", "coach");
+  }
 }
 
 async function sendMessage() {
   const input = document.getElementById("msgInput");
+  const sendBtn = document.getElementById("sendBtn");
   const text = input.value.trim();
   if (!text) return;
   addMsg(text, "user");
   input.value = "";
-  const res = await fetch("/session/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId, message: text })
-  });
-  const data = await res.json();
-  addMsg(data.reply || data.error, "coach");
+  input.disabled = true;
+  sendBtn.disabled = true;
+
+  const typingEl = addTyping();
+  try {
+    const res = await fetch("/session/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, message: text })
+    });
+    await streamIntoBubble(res, typingEl);
+  } catch (e) {
+    typingEl.remove();
+    addMsg("❌ Erreur de connexion, réessaie.", "coach");
+  } finally {
+    input.disabled = false;
+    sendBtn.disabled = false;
+    input.focus();
+    window.scrollTo(0, document.body.scrollHeight);
+  }
 }
 
 async function syncNow() {
