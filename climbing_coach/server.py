@@ -2,7 +2,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
-from fastapi import HTTPException
+from fastapi import HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uuid
@@ -63,11 +63,16 @@ def chat(req: ChatRequest):
     return {"reply": reply}
 
 @app.post("/session/chat/stream")
-def chat_stream(req: ChatRequest):
+def chat_stream(req: ChatRequest, background_tasks: BackgroundTasks):
     coach = sessions.get(req.session_id)
     if coach is None:
         raise HTTPException(status_code=404, detail="unknown session, call /session/start first")
-    return StreamingResponse(coach.chat_stream(req.message), media_type="text/plain")
+    background_tasks.add_task(coach.maybe_generate_plan)
+    return StreamingResponse(
+        coach.chat_stream(req.message),
+        media_type="text/plain",
+        background=background_tasks,
+    )
 
 @app.post("/session/sync")
 async def sync_session(req: SyncRequest):
@@ -100,6 +105,13 @@ def get_stats(session_id: str):
         "flashes_by_grade": stats.flashes_by_grade,
         "last_sync": _get_last_sync(coach),
     }
+
+@app.get("/session/plan")
+def get_plan(session_id: str):
+    coach = sessions.get(session_id)
+    if not coach:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"plan": coach.last_plan.to_dict() if coach.last_plan else None}
 
 # --- Serve manifest.json, sw.js, icons, etc. at root paths ---
 app.mount("/", StaticFiles(directory=Path(__file__).parent), name="static")

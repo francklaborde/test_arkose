@@ -48,6 +48,14 @@
     .statRow { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #222; font-size: 14px; }
     .statRow:last-child { border-bottom: none; }
     #statsEmpty { color: #888; text-align: center; margin-top: 40px; }
+
+    #planView { display: none; padding: 60px 16px 90px; }
+    #planEmpty { color: #888; text-align: center; margin-top: 40px; }
+    .planBlock { background: #2a2a2a; border-radius: 14px; padding: 14px; margin-bottom: 12px; }
+    .planBlock .blockTitle { font-size: 14px; color: #888; margin-bottom: 8px; text-transform: uppercase; }
+    .planItem { padding: 8px 0; border-bottom: 1px solid #222; font-size: 15px; }
+    .planItem:last-child { border-bottom: none; }
+    .planItem .meta { color: #888; font-size: 12px; margin-top: 2px; }
   </style>
 </head>
 <body>
@@ -55,6 +63,7 @@
     <div id="tabs">
       <button class="tabBtn active" id="tabChat">Chat</button>
       <button class="tabBtn" id="tabStats">Stats</button>
+      <button class="tabBtn" id="tabPlan">Plan</button>
     </div>
     <div id="topBarRight">
       <span id="lastSync"></span>
@@ -64,6 +73,9 @@
   <div id="chat"></div>
   <div id="statsView">
     <div id="statsEmpty">Chargement...</div>
+  </div>
+  <div id="planView">
+    <div id="planEmpty">Chargement...</div>
   </div>
   <div id="inputBar">
     <input id="msgInput" placeholder="Écris à ton coach..." />
@@ -261,27 +273,79 @@ async function loadStats() {
   }
 }
 
+// --- Plan tab ---
+function planItemHtml(item) {
+  const meta = [];
+  if (item.sets) meta.push(`${item.sets} séries`);
+  if (item.reps) meta.push(item.reps);
+  if (item.duration_min) meta.push(`${item.duration_min} min`);
+  if (item.rest_sec) meta.push(`repos ${item.rest_sec}s`);
+  return `<div class="planItem">
+    <div>${item.name}</div>
+    ${meta.length ? `<div class="meta">${meta.join(" · ")}</div>` : ""}
+    ${item.notes ? `<div class="meta">${item.notes}</div>` : ""}
+  </div>`;
+}
+
+function planSectionHtml(title, items) {
+  if (!items || !items.length) return "";
+  return `<div class="planBlock">
+    <div class="blockTitle">${title}</div>
+    ${items.map(planItemHtml).join("")}
+  </div>`;
+}
+
+function renderPlan(plan) {
+  const el = document.getElementById("planView");
+  if (!plan) {
+    el.innerHTML = "<div id='planEmpty'>Pas encore de séance proposée — parle d'un entraînement avec ton coach.</div>";
+    return;
+  }
+  el.innerHTML = `
+    <div class="levelCard">
+      <div class="label">${plan.title}</div>
+      <div class="value">${plan.total_duration_min ? plan.total_duration_min + " min" : ""}</div>
+    </div>
+    ${planSectionHtml("Échauffement", plan.warmup)}
+    ${planSectionHtml("Séance", plan.blocks)}
+    ${planSectionHtml("Retour au calme", plan.cooldown)}
+  `;
+}
+
+async function loadPlan() {
+  const el = document.getElementById("planView");
+  el.innerHTML = "<div id='planEmpty'>Chargement...</div>";
+  try {
+    const res = await fetch(`/session/plan?session_id=${sessionId}`);
+    if (!res.ok) throw new Error("bad response");
+    const data = await res.json();
+    renderPlan(data.plan);
+  } catch (e) {
+    el.innerHTML = "<div id='planEmpty'>❌ Impossible de charger le plan</div>";
+  }
+}
+
 function showTab(tab) {
   const chatEl2 = document.getElementById("chat");
   const statsEl = document.getElementById("statsView");
+  const planEl = document.getElementById("planView");
   const inputBar = document.getElementById("inputBar");
   document.getElementById("tabChat").classList.toggle("active", tab === "chat");
   document.getElementById("tabStats").classList.toggle("active", tab === "stats");
+  document.getElementById("tabPlan").classList.toggle("active", tab === "plan");
 
-  if (tab === "chat") {
-    chatEl2.style.display = "block";
-    inputBar.style.display = "flex";
-    statsEl.style.display = "none";
-  } else {
-    chatEl2.style.display = "none";
-    inputBar.style.display = "none";
-    statsEl.style.display = "block";
-    loadStats();
-  }
+  chatEl2.style.display = tab === "chat" ? "block" : "none";
+  inputBar.style.display = tab === "chat" ? "flex" : "none";
+  statsEl.style.display = tab === "stats" ? "block" : "none";
+  planEl.style.display = tab === "plan" ? "block" : "none";
+
+  if (tab === "stats") loadStats();
+  if (tab === "plan") loadPlan();
 }
 
 document.getElementById("tabChat").onclick = () => showTab("chat");
 document.getElementById("tabStats").onclick = () => showTab("stats");
+document.getElementById("tabPlan").onclick = () => showTab("plan");
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js");
