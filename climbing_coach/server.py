@@ -39,6 +39,10 @@ class PlanEditRequest(BaseModel):
     blocks: Optional[list[PlanBlockEdit]] = None
     cooldown: Optional[list[PlanBlockEdit]] = None
 
+class ProfileUpdateRequest(BaseModel):
+    session_id: str
+    profile: dict
+
 def _get_last_sync(coach: ClimbingCoach) -> Optional[str]:
     stats = coach.get_stats()
     if not stats or not stats.last_sync:
@@ -155,6 +159,27 @@ def edit_plan(plan_id: str, req: PlanEditRequest, session_id: str):
     if req.cooldown is not None:
         plan.cooldown = [PlanBlock(**b.model_dump()) for b in req.cooldown]
     return {"status": "ok", "plan": plan.to_dict()}
+
+@app.get("/session/profile")
+def get_profile(session_id: str):
+    coach = sessions.get(session_id)
+    if not coach or not coach.profile:
+        raise HTTPException(status_code=404, detail="Session or profile not found")
+    return coach.profile.to_dict()
+
+@app.put("/session/profile")
+def update_profile(req: ProfileUpdateRequest):
+    coach = sessions.get(req.session_id)
+    if not coach or not coach.profile:
+        raise HTTPException(status_code=404, detail="Session or profile not found")
+    # sboulder_user_id / gyms link the profile to the DB — never let the
+    # edit form overwrite them, even if the submitted payload includes them.
+    incoming = dict(req.profile)
+    incoming["sboulder_user_id"] = coach.profile.sboulder_user_id
+    incoming["gyms"] = coach.profile.gyms
+    coach.profile = ClimberProfile.from_dict(incoming)
+    coach.save_profile()
+    return {"status": "ok"}
 
 # --- Serve manifest.json, sw.js, icons, etc. at root paths ---
 app.mount("/", StaticFiles(directory=Path(__file__).parent), name="static")
