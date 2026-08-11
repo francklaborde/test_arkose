@@ -151,7 +151,7 @@
       <button class="modeBtn" id="modeOnboardingBtn">Onboarding</button>
     </div>
     <div id="onboardingSaveBar">
-      <input id="profilePathInput" placeholder="Chemin de sauvegarde du profil (ex: C:\...\franck.json)" />
+      <input id="profilePathInput" value="C:\Users\Franc\OneDrive\Documents\GitHub\test_arkose\database\franck.json" placeholder="Chemin de sauvegarde du profil" />
       <button id="saveProfileBtn">💾 Enregistrer le profil</button>
       <span id="onboardingSaveStatus"></span>
     </div>
@@ -206,10 +206,18 @@ function addTyping() {
   return div;
 }
 
+// Bumped every time a session (re)starts. In-flight streams from a
+// superseded session (e.g. a mode switch that happened mid-stream) check
+// this before touching the DOM so a stray late chunk can't land in the
+// wrong conversation. activeAbortController lets us also cancel the actual
+// in-flight fetch instead of just letting it dangle.
+let sessionToken = 0;
+let activeAbortController = null;
+
 // Reads a streaming text/plain response, filling a coach bubble as chunks arrive.
 // Renders plain text while streaming (partial markdown can produce broken HTML),
 // then swaps to the fully rendered markdown once the stream closes.
-async function streamIntoBubble(res, typingEl) {
+async function streamIntoBubble(res, typingEl, myToken) {
   if (!res.ok || !res.body) throw new Error("bad response");
 
   const reader = res.body.getReader();
@@ -219,6 +227,7 @@ async function streamIntoBubble(res, typingEl) {
 
   while (true) {
     const { done, value } = await reader.read();
+    if (myToken !== sessionToken) return; // superseded by a newer session/mode
     if (done) break;
     const chunk = decoder.decode(value, { stream: true });
     if (!chunk) continue;
@@ -242,18 +251,26 @@ async function streamIntoBubble(res, typingEl) {
 }
 
 async function startSession() {
+  const myToken = ++sessionToken;
+  if (activeAbortController) activeAbortController.abort();
+  const controller = new AbortController();
+  activeAbortController = controller;
+
   const typingEl = addTyping();
   try {
     const res = await fetch("/session/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: currentMode })
+      body: JSON.stringify({ mode: currentMode }),
+      signal: controller.signal
     });
+    if (myToken !== sessionToken) return; // a newer session started while we awaited
     if (!res.ok) throw new Error("bad response");
     sessionId = res.headers.get("X-Session-Id");
     updateLastSync(res.headers.get("X-Last-Sync"));
-    await streamIntoBubble(res, typingEl);
+    await streamIntoBubble(res, typingEl, myToken);
   } catch (e) {
+    if (myToken !== sessionToken) return; // superseded — ignore the abort error
     typingEl.remove();
     addMsg("❌ Impossible de démarrer la session, réessaie.", "coach");
   }
@@ -320,23 +337,31 @@ async function sendMessage() {
   input.disabled = true;
   sendBtn.disabled = true;
 
+  const myToken = sessionToken;
+  const controller = new AbortController();
+  activeAbortController = controller;
+
   const typingEl = addTyping();
   try {
     const res = await fetch("/session/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, message: text })
+      body: JSON.stringify({ session_id: sessionId, message: text }),
+      signal: controller.signal
     });
-    await streamIntoBubble(res, typingEl);
-    checkForNewPlans();
+    await streamIntoBubble(res, typingEl, myToken);
+    if (myToken === sessionToken) checkForNewPlans();
   } catch (e) {
+    if (myToken !== sessionToken) return; // mode was switched mid-message — ignore
     typingEl.remove();
     addMsg("❌ Erreur de connexion, réessaie.", "coach");
   } finally {
-    input.disabled = false;
-    sendBtn.disabled = false;
-    input.focus();
-    window.scrollTo(0, document.body.scrollHeight);
+    if (myToken === sessionToken) {
+      input.disabled = false;
+      sendBtn.disabled = false;
+      input.focus();
+      window.scrollTo(0, document.body.scrollHeight);
+    }
   }
 }
 
