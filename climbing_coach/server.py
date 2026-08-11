@@ -15,12 +15,22 @@ from src.sboulder_collector import setup_logging
 setup_logging()
 app = FastAPI()
 
+DEFAULT_DB_PATH = r"C:\Users\Franc\OneDrive\Documents\GitHub\test_arkose\database\climbing.db"
+DEFAULT_PROFILE_PATH = r"C:\Users\Franc\OneDrive\Documents\GitHub\test_arkose\database\franck.json"
+
 # In-memory session store: session_id -> ClimbingCoach instance
 sessions: dict[str, ClimbingCoach] = {}
+
+class StartSessionRequest(BaseModel):
+    mode: str = "coaching"  # "coaching" | "onboarding"
 
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+
+class OnboardingFinishRequest(BaseModel):
+    session_id: str
+    profile_path: str
 
 class SyncRequest(BaseModel):
     session_id: str
@@ -51,23 +61,29 @@ def _get_last_sync(coach: ClimbingCoach) -> Optional[str]:
     return max(timestamps) if timestamps else None
 
 @app.post("/session/start")
-def start_session():
+def start_session(req: StartSessionRequest):
     API_KEY = "cglowaxE1vSmixJcBun7lKmi71qsw79E"
     session_id = str(uuid.uuid4())
+    mode = CoachMode.ONBOARDING if req.mode == "onboarding" else CoachMode.COACHING
+
     coach = ClimbingCoach.from_mistral(  # adjust to your actual factory method name
         api_key=API_KEY,
-        db_path=r"C:\Users\Franc\OneDrive\Documents\GitHub\test_arkose\database\climbing.db",
-        profile_path=r"C:\Users\Franc\OneDrive\Documents\GitHub\test_arkose\database\franck.json",
+        db_path=DEFAULT_DB_PATH,
+        profile_path=DEFAULT_PROFILE_PATH,
     )
-    coach.profile = ClimberProfile.load(r"C:\Users\Franc\OneDrive\Documents\GitHub\test_arkose\database\franck.json")
+
+    if mode == CoachMode.COACHING:
+        coach.profile = ClimberProfile.load(DEFAULT_PROFILE_PATH)
+
     sessions[session_id] = coach
-    last_sync = _get_last_sync(coach)
+    last_sync = _get_last_sync(coach) if mode == CoachMode.COACHING else None
     headers = {
         "X-Session-Id": session_id,
         "X-Last-Sync": last_sync or "",
+        "X-Mode": mode.value,
     }
     return StreamingResponse(
-        coach.start_session_stream(CoachMode.COACHING),
+        coach.start_session_stream(mode),
         media_type="text/plain",
         headers=headers,
     )
@@ -99,6 +115,23 @@ async def sync_session(req: SyncRequest):
         raise HTTPException(status_code=404, detail="Session not found")
     coach.sync_now()
     return {"status": "ok", "last_sync": _get_last_sync(coach)}
+
+@app.post("/session/onboarding/finish")
+def finish_onboarding(req: OnboardingFinishRequest):
+    coach = sessions.get(req.session_id)
+    if not coach:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if coach.mode != CoachMode.ONBOARDING:
+        raise HTTPException(status_code=400, detail="Session is not in onboarding mode")
+    profile_path = req.profile_path.strip()
+    if not profile_path:
+        raise HTTPException(status_code=400, detail="profile_path is required")
+    try:
+        profile = coach.extract_profile_from_history()
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Extraction failed: {e}")
+    coach.save_profile(profile_path)
+    return {"status": "ok", "profile_path": profile_path, "profile": profile.to_dict()}
 
 # --- Serve the minimal chat page ---
 @app.get("/", response_class=HTMLResponse)
