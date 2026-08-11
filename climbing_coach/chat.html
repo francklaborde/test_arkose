@@ -90,6 +90,29 @@
     .editRow input { width: auto; }
     .removeItemBtn { align-self: flex-end; background: none; border: none; color: #888; font-size: 14px; padding: 2px 6px; }
     .addItemBtn { margin-top: 8px; width: 100%; padding: 8px; border-radius: 8px; border: 1px dashed #444; background: none; color: #888; font-size: 13px; }
+
+    #profileView { display: none; padding: 60px 16px 100px; }
+    #profileEmpty { color: #888; text-align: center; margin-top: 40px; }
+    .formSection { background: #2a2a2a; border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+    .formSection .sectionTitle { font-size: 13px; color: #888; margin-bottom: 10px; text-transform: uppercase; }
+    .formRow { margin-bottom: 10px; }
+    .formRow label { display: block; font-size: 13px; color: #aaa; margin-bottom: 4px; }
+    .formRow input, .formRow textarea, .formRow select {
+      width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px;
+      border: 1px solid #333; background: #1a1a1a; color: #eee; font-size: 15px;
+    }
+    .formRow input:disabled { color: #777; }
+    .formRow textarea { resize: vertical; min-height: 50px; font-family: inherit; }
+    .formRow .hint { font-size: 11px; color: #666; margin-top: 3px; }
+    .formGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .injuryCard { background: #1a1a1a; border-radius: 10px; padding: 10px; margin-bottom: 8px; }
+    .injuryCard .injuryTop { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .injuryCard input[type="text"] { margin-top: 6px; }
+    .addBtn { background: #2a2a2a; border: 1px dashed #444; color: #aaa; border-radius: 8px; padding: 10px; width: 100%; font-size: 14px; }
+    .removeBtn { background: none; border: none; color: #888; font-size: 16px; }
+    #profileSaveBar { padding-top: 4px; }
+    #profileSaveBtn { width: 100%; padding: 12px; border-radius: 12px; border: none; background: #2563eb; color: white; font-size: 15px; }
+    #profileSaveStatus { text-align: center; margin-top: 8px; color: #888; font-size: 13px; }
   </style>
 </head>
 <body>
@@ -98,6 +121,7 @@
       <button class="tabBtn active" id="tabChat">Chat</button>
       <button class="tabBtn" id="tabStats">Stats</button>
       <button class="tabBtn" id="tabPlan">Plan</button>
+      <button class="tabBtn" id="tabProfile">Profil</button>
     </div>
     <div id="topBarRight">
       <span id="lastSync"></span>
@@ -110,6 +134,9 @@
   </div>
   <div id="planView">
     <div id="planEmpty">Chargement...</div>
+  </div>
+  <div id="profileView">
+    <div id="profileEmpty">Chargement...</div>
   </div>
   <div id="inputBar">
     <input id="msgInput" placeholder="Écris à ton coach..." />
@@ -606,27 +633,250 @@ async function savePlanEdits(wrapper, plan) {
   }
 }
 
+// --- Profile tab ---
+let currentProfileRaw = null;
+let injuriesState = [];
+
+function joinList(arr) { return (arr || []).join(", "); }
+function splitList(str) {
+  return (str || "").split(",").map(s => s.trim()).filter(Boolean);
+}
+function numOrNull(id) {
+  const v = document.getElementById(id).value;
+  return v === "" ? null : Number(v);
+}
+
+function injuryCardHtml(inj, idx) {
+  return `<div class="injuryCard" data-idx="${idx}">
+    <div class="injuryTop">
+      <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#aaa;">
+        <input type="checkbox" class="inj-active" ${inj.active ? "checked" : ""}/> Active
+      </label>
+      <button class="removeBtn inj-remove">✕</button>
+    </div>
+    <input type="text" class="inj-desc" placeholder="Description" value="${inj.description || ""}"/>
+    <input type="text" class="inj-avoid" placeholder="À éviter (séparé par des virgules)" value="${joinList(inj.avoid)}"/>
+  </div>`;
+}
+
+function renderInjuries() {
+  const el = document.getElementById("injuriesContainer");
+  el.innerHTML = injuriesState.map(injuryCardHtml).join("");
+  el.querySelectorAll(".inj-remove").forEach(btn => {
+    btn.onclick = () => {
+      const idx = parseInt(btn.closest(".injuryCard").dataset.idx);
+      injuriesState.splice(idx, 1);
+      renderInjuries();
+    };
+  });
+}
+
+function renderProfileForm(profile) {
+  const el = document.getElementById("profileView");
+  injuriesState = (profile.injuries || []).map(i => ({ ...i }));
+  el.innerHTML = `
+    <div class="formSection">
+      <div class="sectionTitle">Physique</div>
+      <div class="formGrid">
+        <div class="formRow"><label>Âge</label><input type="number" id="pf_age" value="${profile.age ?? ""}"/></div>
+        <div class="formRow"><label>Taille (cm)</label><input type="number" id="pf_height_cm" value="${profile.height_cm ?? ""}"/></div>
+        <div class="formRow"><label>Envergure (cm)</label><input type="number" id="pf_wingspan_cm" value="${profile.wingspan_cm ?? ""}"/></div>
+        <div class="formRow"><label>Poids (kg)</label><input type="number" step="0.1" id="pf_weight_kg" value="${profile.weight_kg ?? ""}"/></div>
+      </div>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Niveau</div>
+      <div class="formRow"><label>Années de grimpe</label><input type="number" step="0.5" id="pf_years_climbing" value="${profile.years_climbing ?? ""}"/></div>
+      <div class="formRow"><label>Grade de départ</label><input type="text" id="pf_started_at_level" value="${profile.started_at_level ?? ""}"/></div>
+      <div class="formGrid">
+        <div class="formRow"><label>Redpoint (cotation FR)</label><input type="text" id="pf_current_redpoint_grade_fr" value="${profile.current_redpoint_grade_fr ?? ""}"/></div>
+        <div class="formRow"><label>Flash (cotation FR)</label><input type="text" id="pf_current_flash_grade_fr" value="${profile.current_flash_grade_fr ?? ""}"/></div>
+      </div>
+      <div class="formGrid">
+        <div class="formRow">
+          <label>Redpoint (niveau Arkose)</label>
+          <input type="text" value="${profile.current_redpoint_level_arkose ?? ""}" disabled/>
+          <div class="hint">Mis à jour auto à la sync</div>
+        </div>
+        <div class="formRow">
+          <label>Flash (niveau Arkose)</label>
+          <input type="text" value="${profile.current_flash_level_arkose ?? ""}" disabled/>
+          <div class="hint">Mis à jour auto à la sync</div>
+        </div>
+      </div>
+      <div class="formRow"><label>Styles préférés</label><input type="text" id="pf_preferred_styles" value="${joinList(profile.preferred_styles)}"/><div class="hint">Séparés par des virgules</div></div>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Ressenti</div>
+      <div class="formRow"><label>Points forts</label><input type="text" id="pf_self_strengths" value="${joinList(profile.self_strengths)}"/><div class="hint">Séparés par des virgules</div></div>
+      <div class="formRow"><label>Points faibles</label><input type="text" id="pf_self_weaknesses" value="${joinList(profile.self_weaknesses)}"/><div class="hint">Séparés par des virgules</div></div>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Entraînement</div>
+      <div class="formGrid">
+        <div class="formRow"><label>Séances/semaine</label><input type="number" id="pf_gym_sessions_per_week" value="${profile.gym_sessions_per_week ?? ""}"/></div>
+        <div class="formRow"><label>Durée séance (min)</label><input type="number" id="pf_typical_session_duration_min" value="${profile.typical_session_duration_min ?? ""}"/></div>
+      </div>
+      <div class="formRow"><label>Autres activités</label><input type="text" id="pf_other_activities" value="${joinList(profile.other_activities)}"/><div class="hint">Séparées par des virgules</div></div>
+      <div class="formRow"><label>Setup maison</label><input type="text" id="pf_home_setup" value="${joinList(profile.home_setup)}"/><div class="hint">Séparé par des virgules (ex: poutre, campus board)</div></div>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Blessures</div>
+      <div id="injuriesContainer"></div>
+      <button class="addBtn" id="addInjuryBtn">+ Ajouter une blessure</button>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Objectifs</div>
+      <div class="formRow"><label>Court terme</label><input type="text" id="pf_short_term_goals" value="${joinList(profile.short_term_goals)}"/><div class="hint">Séparés par des virgules</div></div>
+      <div class="formRow"><label>Long terme</label><input type="text" id="pf_long_term_goals" value="${joinList(profile.long_term_goals)}"/><div class="hint">Séparés par des virgules</div></div>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Préférences coaching</div>
+      <div class="formGrid">
+        <div class="formRow"><label>Ton</label>
+          <select id="pf_coach_tone">
+            ${["direct", "encouraging", "analytical", "concise"].map(t =>
+              `<option value="${t}" ${profile.coach_tone === t ? "selected" : ""}>${t}</option>`).join("")}
+          </select>
+        </div>
+        <div class="formRow"><label>Focus</label>
+          <select id="pf_focus_preference">
+            ${["weaknesses", "strengths", "balanced", "ask_each_time"].map(t =>
+              `<option value="${t}" ${profile.focus_preference === t ? "selected" : ""}>${t}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <div class="formRow"><label>Langue</label>
+        <select id="pf_coach_language">
+          <option value="fr" ${profile.coach_language === "fr" ? "selected" : ""}>Français</option>
+          <option value="en" ${profile.coach_language === "en" ? "selected" : ""}>English</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Notes libres</div>
+      <div class="formRow"><textarea id="pf_notes">${profile.notes ?? ""}</textarea></div>
+    </div>
+
+    <div id="profileSaveBar">
+      <button id="profileSaveBtn">Enregistrer le profil</button>
+      <div id="profileSaveStatus"></div>
+    </div>
+  `;
+  renderInjuries();
+  document.getElementById("addInjuryBtn").onclick = () => {
+    injuriesState.push({ description: "", active: true, avoid: [] });
+    renderInjuries();
+  };
+  document.getElementById("profileSaveBtn").onclick = saveProfile;
+}
+
+function collectProfileFromForm() {
+  const injuries = injuriesState.map((_, idx) => {
+    const card = document.querySelector(`.injuryCard[data-idx="${idx}"]`);
+    return {
+      description: card.querySelector(".inj-desc").value.trim(),
+      active: card.querySelector(".inj-active").checked,
+      avoid: splitList(card.querySelector(".inj-avoid").value),
+    };
+  }).filter(i => i.description);
+
+  return {
+    ...currentProfileRaw,
+    age: numOrNull("pf_age"),
+    height_cm: numOrNull("pf_height_cm"),
+    wingspan_cm: numOrNull("pf_wingspan_cm"),
+    weight_kg: numOrNull("pf_weight_kg"),
+    years_climbing: numOrNull("pf_years_climbing"),
+    started_at_level: document.getElementById("pf_started_at_level").value.trim(),
+    current_redpoint_grade_fr: document.getElementById("pf_current_redpoint_grade_fr").value.trim(),
+    current_flash_grade_fr: document.getElementById("pf_current_flash_grade_fr").value.trim(),
+    preferred_styles: splitList(document.getElementById("pf_preferred_styles").value),
+    self_strengths: splitList(document.getElementById("pf_self_strengths").value),
+    self_weaknesses: splitList(document.getElementById("pf_self_weaknesses").value),
+    gym_sessions_per_week: numOrNull("pf_gym_sessions_per_week"),
+    typical_session_duration_min: numOrNull("pf_typical_session_duration_min"),
+    other_activities: splitList(document.getElementById("pf_other_activities").value),
+    home_setup: splitList(document.getElementById("pf_home_setup").value),
+    injuries: injuries,
+    short_term_goals: splitList(document.getElementById("pf_short_term_goals").value),
+    long_term_goals: splitList(document.getElementById("pf_long_term_goals").value),
+    coach_tone: document.getElementById("pf_coach_tone").value,
+    coach_language: document.getElementById("pf_coach_language").value,
+    focus_preference: document.getElementById("pf_focus_preference").value,
+    notes: document.getElementById("pf_notes").value,
+  };
+}
+
+async function saveProfile() {
+  const btn = document.getElementById("profileSaveBtn");
+  const status = document.getElementById("profileSaveStatus");
+  btn.disabled = true;
+  status.textContent = "Enregistrement...";
+  try {
+    const updated = collectProfileFromForm();
+    const res = await fetch("/session/profile", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, profile: updated })
+    });
+    if (!res.ok) throw new Error("bad response");
+    currentProfileRaw = updated;
+    status.textContent = "✅ Profil enregistré";
+  } catch (e) {
+    status.textContent = "❌ Erreur lors de l'enregistrement";
+  }
+  btn.disabled = false;
+  setTimeout(() => { status.textContent = ""; }, 2500);
+}
+
+async function loadProfile() {
+  const el = document.getElementById("profileView");
+  el.innerHTML = "<div id='profileEmpty'>Chargement...</div>";
+  try {
+    const res = await fetch(`/session/profile?session_id=${sessionId}`);
+    if (!res.ok) throw new Error("bad response");
+    const data = await res.json();
+    currentProfileRaw = data;
+    renderProfileForm(data);
+  } catch (e) {
+    el.innerHTML = "<div id='profileEmpty'>❌ Impossible de charger le profil</div>";
+  }
+}
+
 function showTab(tab) {
   const chatEl2 = document.getElementById("chat");
   const statsEl = document.getElementById("statsView");
   const planEl = document.getElementById("planView");
+  const profileEl = document.getElementById("profileView");
   const inputBar = document.getElementById("inputBar");
   document.getElementById("tabChat").classList.toggle("active", tab === "chat");
   document.getElementById("tabStats").classList.toggle("active", tab === "stats");
   document.getElementById("tabPlan").classList.toggle("active", tab === "plan");
+  document.getElementById("tabProfile").classList.toggle("active", tab === "profile");
 
   chatEl2.style.display = tab === "chat" ? "block" : "none";
   inputBar.style.display = tab === "chat" ? "flex" : "none";
   statsEl.style.display = tab === "stats" ? "block" : "none";
   planEl.style.display = tab === "plan" ? "block" : "none";
+  profileEl.style.display = tab === "profile" ? "block" : "none";
 
   if (tab === "stats") loadStats();
   if (tab === "plan") loadPlan();
+  if (tab === "profile") loadProfile();
 }
 
 document.getElementById("tabChat").onclick = () => showTab("chat");
 document.getElementById("tabStats").onclick = () => showTab("stats");
 document.getElementById("tabPlan").onclick = () => showTab("plan");
+document.getElementById("tabProfile").onclick = () => showTab("profile");
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js");

@@ -1164,6 +1164,7 @@ class ClimbingCoach:
             if self._stats_builder and self.auto_sync:
                 self.collector.sync_from_profile(self.profile)
             stats = self._build_stats()
+            self._sync_profile_from_stats(stats)
             system = self.prompt_builder.coaching_system(self.profile, stats)
             self.llm.set_system(system)
             name = self.profile.name or "grimpeur"
@@ -1207,7 +1208,27 @@ class ClimbingCoach:
         if not self._stats_builder or not self.profile:
             raise RuntimeError("No collector/profile configured — cannot sync.")
         self.collector.sync_from_profile(self.profile)
+        self._sync_profile_from_stats(self._build_stats())
         log.info("Manual sync triggered for user %s", self.profile.sboulder_user_id)
+
+    def _sync_profile_from_stats(self, stats: Optional[ClimbingStats]) -> None:
+        """
+        Copy DB-derived facts (current Arkose redpoint/flash level) into the
+        profile — deterministic, no LLM involved. Saves the profile if
+        anything actually changed.
+        """
+        if not stats or not self.profile:
+            return
+        changed = False
+        if stats.current_level and stats.current_level != self.profile.current_redpoint_level_arkose:
+            self.profile.current_redpoint_level_arkose = stats.current_level
+            changed = True
+        if stats.current_flash_level and stats.current_flash_level != self.profile.current_flash_level_arkose:
+            self.profile.current_flash_level_arkose = stats.current_flash_level
+            changed = True
+        if changed:
+            self.save_profile()
+            log.info("Profile levels auto-updated from stats")
 
     # ------------------------------------------------------------------
     # Session plan

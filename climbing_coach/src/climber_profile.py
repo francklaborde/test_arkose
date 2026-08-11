@@ -220,12 +220,80 @@ class ClimberProfile:
         )
 
     # ------------------------------------------------------------------
+    # Partial updates (used by the automatic profile-update mechanism)
+    # ------------------------------------------------------------------
+
+    # Scalar fields: overwritten when a new value is provided.
+    _UPDATABLE_SCALAR_FIELDS = [
+        "age", "height_cm", "wingspan_cm", "weight_kg", "years_climbing",
+        "gym_sessions_per_week", "typical_session_duration_min",
+        "coach_tone", "coach_language", "focus_preference", "notes",
+    ]
+
+    # List fields: new items are appended (deduplicated, case-insensitive),
+    # existing items are never removed by this mechanism.
+    _UPDATABLE_LIST_FIELDS = {
+        "add_preferred_styles": "preferred_styles",
+        "add_self_strengths": "self_strengths",
+        "add_self_weaknesses": "self_weaknesses",
+        "add_other_activities": "other_activities",
+        "add_home_setup": "home_setup",
+        "add_short_term_goals": "short_term_goals",
+        "add_long_term_goals": "long_term_goals",
+    }
+
+    def apply_updates(self, updates: dict) -> list[str]:
+        """
+        Merge a partial `updates` dict (as produced by the LLM profile-update
+        extraction) into this profile. Scalar fields are overwritten; add_*
+        list fields are appended without duplicates; injuries can be added
+        (add_injuries) or marked healed (resolve_injuries, matched by
+        description substring). Existing data is never silently erased.
+        Returns the list of field names that actually changed.
+        """
+        changed: list[str] = []
+
+        for field_name in self._UPDATABLE_SCALAR_FIELDS:
+            if field_name in updates and updates[field_name] not in (None, ""):
+                if getattr(self, field_name) != updates[field_name]:
+                    setattr(self, field_name, updates[field_name])
+                    changed.append(field_name)
+
+        for update_key, field_name in self._UPDATABLE_LIST_FIELDS.items():
+            new_items = updates.get(update_key) or []
+            current = getattr(self, field_name)
+            existing_lower = {item.lower() for item in current}
+            for item in new_items:
+                if item and item.lower() not in existing_lower:
+                    current.append(item)
+                    existing_lower.add(item.lower())
+                    changed.append(field_name)
+
+        for inj_data in updates.get("add_injuries") or []:
+            desc = (inj_data.get("description") or "").strip()
+            if not desc:
+                continue
+            if any(desc.lower() in i.description.lower() for i in self.injuries):
+                continue
+            self.injuries.append(Injury.from_dict(inj_data))
+            changed.append("injuries")
+
+        for resolved_desc in updates.get("resolve_injuries") or []:
+            resolved_lower = resolved_desc.lower()
+            for inj in self.injuries:
+                if inj.active and resolved_lower in inj.description.lower():
+                    inj.active = False
+                    changed.append("injuries")
+
+        return changed
+
+    # ------------------------------------------------------------------
     # File I/O
     # ------------------------------------------------------------------
 
     def save(self, path: str | Path = "climber_profile.json") -> None:
         path = Path(path)
-        path.write_text(json.dumps(self.to_dict(), indent=2, ensure_ascii=False))
+        path.write_text(json.dumps(self.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
         log.info("Profile saved → %s", path.resolve())
 
     @classmethod
@@ -236,7 +304,7 @@ class ClimberProfile:
                 f"Profile not found at {path}.\n"
                 "Run ClimberProfile().save('<path>') to create a blank template."
             )
-        profile = cls.from_dict(json.loads(path.read_text()))
+        profile = cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
         log.info("Profile loaded ← %s", path.resolve())
         return profile
 
