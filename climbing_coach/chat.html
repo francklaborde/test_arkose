@@ -744,6 +744,7 @@ async function savePlanEdits(wrapper, plan) {
 // --- Profile tab ---
 let currentProfileRaw = null;
 let injuriesState = [];
+let availableGyms = [];
 
 function joinList(arr) { return (arr || []).join(", "); }
 function splitList(str) {
@@ -782,9 +783,34 @@ function renderInjuries() {
 function renderProfileForm(profile) {
   const el = document.getElementById("profileView");
   injuriesState = (profile.injuries || []).map(i => ({ ...i }));
+  const gymsState = new Set(profile.gyms || []);
+  const gymsHtml = availableGyms.length
+    ? availableGyms.map(g => `
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px;">
+          <input type="checkbox" class="pf-gym" value="${g}" ${gymsState.has(g) ? "checked" : ""}/> ${g}
+        </label>`).join("")
+    : `<div class="hint">Aucune salle trouvée en base.</div>`;
+
   el.innerHTML = `
     <div class="formSection">
+      <div class="sectionTitle">Salles</div>
+      <div class="formRow">
+        <label>Salles fréquentées</label>
+        <div style="display:flex; flex-direction:column; gap:4px;">${gymsHtml}</div>
+        <div class="hint">Utilisées pour la synchronisation avec la base — liste fixe, non modifiable en texte libre.</div>
+      </div>
+    </div>
+    <div class="formSection">
       <div class="sectionTitle">Physique</div>
+      <div class="formRow">
+        <label>Sexe</label>
+        <select id="pf_sex">
+          <option value="" ${!profile.sex ? "selected" : ""}>Non précisé</option>
+          <option value="homme" ${profile.sex === "homme" ? "selected" : ""}>Homme</option>
+          <option value="femme" ${profile.sex === "femme" ? "selected" : ""}>Femme</option>
+          <option value="autre" ${profile.sex === "autre" ? "selected" : ""}>Autre</option>
+        </select>
+      </div>
       <div class="formGrid">
         <div class="formRow"><label>Âge</label><input type="number" id="pf_age" value="${profile.age ?? ""}"/></div>
         <div class="formRow"><label>Taille (cm)</label><input type="number" id="pf_height_cm" value="${profile.height_cm ?? ""}"/></div>
@@ -896,8 +922,12 @@ function collectProfileFromForm() {
     };
   }).filter(i => i.description);
 
+  const gyms = Array.from(document.querySelectorAll(".pf-gym:checked")).map(cb => cb.value);
+
   return {
     ...currentProfileRaw,
+    gyms,
+    sex: document.getElementById("pf_sex").value || null,
     age: numOrNull("pf_age"),
     height_cm: numOrNull("pf_height_cm"),
     wingspan_cm: numOrNull("pf_wingspan_cm"),
@@ -949,9 +979,13 @@ async function loadProfile() {
   const el = document.getElementById("profileView");
   el.innerHTML = "<div id='profileEmpty'>Chargement...</div>";
   try {
-    const res = await fetch(`/session/profile?session_id=${sessionId}`);
-    if (!res.ok) throw new Error("bad response");
-    const data = await res.json();
+    const [profileRes, gymsRes] = await Promise.all([
+      fetch(`/session/profile?session_id=${sessionId}`),
+      fetch(`/session/gyms?session_id=${sessionId}`),
+    ]);
+    if (!profileRes.ok) throw new Error("bad response");
+    const data = await profileRes.json();
+    availableGyms = gymsRes.ok ? (await gymsRes.json()).gyms : [];
     currentProfileRaw = data;
     renderProfileForm(data);
   } catch (e) {
