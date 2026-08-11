@@ -200,16 +200,29 @@ def get_profile(session_id: str):
         raise HTTPException(status_code=404, detail="Session or profile not found")
     return coach.profile.to_dict()
 
+@app.get("/session/gyms")
+def get_available_gyms(session_id: str):
+    coach = sessions.get(session_id)
+    if not coach:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"gyms": coach.available_gyms()}
+
 @app.put("/session/profile")
 def update_profile(req: ProfileUpdateRequest):
     coach = sessions.get(req.session_id)
     if not coach or not coach.profile:
         raise HTTPException(status_code=404, detail="Session or profile not found")
-    # sboulder_user_id / gyms link the profile to the DB — never let the
-    # edit form overwrite them, even if the submitted payload includes them.
+    # sboulder_user_id links the profile to the DB — never let the edit form
+    # overwrite it, even if the submitted payload includes it.
     incoming = dict(req.profile)
     incoming["sboulder_user_id"] = coach.profile.sboulder_user_id
-    incoming["gyms"] = coach.profile.gyms
+    # gyms must stay within the DB's known slugs (checkboxes on the frontend
+    # enforce this already; re-check server-side against free-form input).
+    valid_gyms = set(coach.available_gyms())
+    submitted_gyms = incoming.get("gyms") or []
+    unknown = [g for g in submitted_gyms if g not in valid_gyms]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown gym(s): {', '.join(unknown)}")
     coach.profile = ClimberProfile.from_dict(incoming)
     coach.save_profile()
     return {"status": "ok"}

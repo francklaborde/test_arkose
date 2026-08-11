@@ -238,6 +238,7 @@ class ClimberProfile:
     # List fields: new items are appended (deduplicated, case-insensitive),
     # existing items are never removed by this mechanism.
     _UPDATABLE_LIST_FIELDS = {
+        "add_gyms": "gyms",
         "add_preferred_styles": "preferred_styles",
         "add_self_strengths": "self_strengths",
         "add_self_weaknesses": "self_weaknesses",

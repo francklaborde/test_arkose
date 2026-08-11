@@ -721,14 +721,15 @@ Ton objectif est de collecter suffisamment d'informations pour construire \
 son profil de coaching personnalisé.
 
 Tu dois couvrir progressivement ces thèmes, dans un ordre naturel :
-1. Profil physique (sexe, âge, taille, envergure, poids) — demande-les ensemble de façon légère
-2. Historique de grimpe (depuis combien de temps, comment il a commencé)
-3. Niveau actuel (grade redpoint, grade flash)
-4. Styles préférés et points forts ressentis
-5. Points faibles ressentis ou identifiés
-6. Entraînement actuel (séances/semaine, durée, setup maison, autres activités)
-7. Blessures actuelles ou passées importantes
-8. Objectifs court terme et long terme
+1. Salle(s) Arkose fréquentée(s) (laquelle/lesquelles, celle où il grimpe le plus souvent)
+2. Profil physique (sexe, âge, taille, envergure, poids) — demande-les ensemble de façon légère
+3. Historique de grimpe (depuis combien de temps, comment il a commencé)
+4. Niveau actuel (grade redpoint, grade flash)
+5. Styles préférés et points forts ressentis
+6. Points faibles ressentis ou identifiés
+7. Entraînement actuel (séances/semaine, durée, setup maison, autres activités)
+8. Blessures actuelles ou passées importantes
+9. Objectifs court terme et long terme
 
 Règles importantes :
 - Pose UNE seule question à la fois, ou un groupe logique de 2-3 questions courtes
@@ -813,6 +814,7 @@ Retourne UNIQUEMENT un objet JSON valide avec les champs suivants \
 
 {
   "name": string,
+  "gyms": [string],
   "sex": "homme" | "femme" | "autre",
   "age": int,
   "height_cm": int,
@@ -840,6 +842,12 @@ Retourne UNIQUEMENT un objet JSON valide avec les champs suivants \
   "coach_language": "fr",
   "focus_preference": string
 }
+
+Format du champ "gyms" : une liste de slugs "arkose/<nom-de-salle>", nom de \
+salle en minuscules avec des tirets à la place des espaces/apostrophes \
+(ex: "Nation" -> "arkose/nation", "Strasbourg St-Denis" -> \
+"arkose/strasbourg-st-denis"). Inclus toutes les salles mentionnées par le \
+grimpeur, pas seulement la principale.
 """
 
     # ------------------------------------------------------------------
@@ -1338,9 +1346,29 @@ class ClimbingCoach:
 
         data = json.loads(clean)
         profile = ClimberProfile.from_dict(data)
+
+        # The extraction only covers what was said in the interview — never
+        # let it erase the DB linkage (sboulder_user_id) or drop gyms already
+        # known from a previous profile. Merge instead of overwrite.
+        if self.profile:
+            profile.sboulder_user_id = self.profile.sboulder_user_id
+            existing_lower = {g.lower() for g in self.profile.gyms}
+            merged_gyms = list(self.profile.gyms)
+            for g in profile.gyms:
+                if g.lower() not in existing_lower:
+                    merged_gyms.append(g)
+                    existing_lower.add(g.lower())
+            profile.gyms = merged_gyms
+
         self.profile = profile
         log.info("Profile extracted: %r", profile)
         return profile
+
+    def available_gyms(self) -> list[str]:
+        """Gym slugs known to the DB — the only valid values for profile.gyms."""
+        if not self._stats_builder:
+            return []
+        return self._stats_builder._all_gyms()
 
     def save_profile(self, path: Optional[str | Path] = None) -> None:
         """Save the current profile to JSON."""
