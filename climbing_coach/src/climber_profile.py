@@ -77,6 +77,9 @@ class ClimberProfile:
     # Gym slugs to sync by default, e.g. ["arkose/montmartre", "arkose/nation"]
 
     # ---- Physical profile ------------------------------------------------
+    sex: Optional[str] = None
+    # "homme" | "femme" | "autre" — affects physiological baselines (strength,
+    # recovery) the coach should account for when giving training advice
     age: Optional[int] = None
     height_cm: Optional[int] = None
     # Already available in the sboulder users collection
@@ -161,6 +164,7 @@ class ClimberProfile:
             "sboulder_user_id": self.sboulder_user_id,
             "name": self.name,
             "gyms": self.gyms,
+            "sex": self.sex,
             "age": self.age,
             "height_cm": self.height_cm,
             "wingspan_cm": self.wingspan_cm,
@@ -193,6 +197,7 @@ class ClimberProfile:
             sboulder_user_id=d.get("sboulder_user_id", ""),
             name=d.get("name", ""),
             gyms=d.get("gyms", []),
+            sex=d.get("sex"),
             age=d.get("age"),
             height_cm=d.get("height_cm"),
             wingspan_cm=d.get("wingspan_cm"),
@@ -225,7 +230,7 @@ class ClimberProfile:
 
     # Scalar fields: overwritten when a new value is provided.
     _UPDATABLE_SCALAR_FIELDS = [
-        "age", "height_cm", "wingspan_cm", "weight_kg", "years_climbing",
+        "sex", "age", "height_cm", "wingspan_cm", "weight_kg", "years_climbing",
         "gym_sessions_per_week", "typical_session_duration_min",
         "coach_tone", "coach_language", "focus_preference", "notes",
     ]
@@ -342,6 +347,8 @@ class ClimberProfile:
 
         # Physical
         phys_parts = []
+        if self.sex:
+            phys_parts.append(self.sex)
         if self.age:
             phys_parts.append(f"{self.age} ans")
         if self.height_cm:

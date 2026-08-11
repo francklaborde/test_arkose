@@ -721,7 +721,7 @@ Ton objectif est de collecter suffisamment d'informations pour construire \
 son profil de coaching personnalisé.
 
 Tu dois couvrir progressivement ces thèmes, dans un ordre naturel :
-1. Profil physique (âge, taille, envergure, poids) — demande-les ensemble de façon légère
+1. Profil physique (sexe, âge, taille, envergure, poids) — demande-les ensemble de façon légère
 2. Historique de grimpe (depuis combien de temps, comment il a commencé)
 3. Niveau actuel (grade redpoint, grade flash)
 4. Styles préférés et points forts ressentis
@@ -813,6 +813,7 @@ Retourne UNIQUEMENT un objet JSON valide avec les champs suivants \
 
 {
   "name": string,
+  "sex": "homme" | "femme" | "autre",
   "age": int,
   "height_cm": int,
   "wingspan_cm": int,
