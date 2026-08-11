@@ -144,6 +144,23 @@ class ClimbingStats:
     current_level: Optional[str] = None
     current_flash_level: Optional[str] = None
 
+    # Timestamp (ISO) of the single most recent ascent across all gyms —
+    # used to surface how long it's been since the climber last climbed.
+    last_ascent_at: Optional[str] = None
+
+    @property
+    def days_since_last_ascent(self) -> Optional[int]:
+        """Whole days elapsed since the last recorded ascent, or None if unknown."""
+        if not self.last_ascent_at:
+            return None
+        try:
+            last = datetime.fromisoformat(self.last_ascent_at)
+        except ValueError:
+            return None
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - last).days
+
     @property
     def weakest_route_types(self) -> list[RouteTypeStat]:
         """Leaf types with at least 3 total boulders, sorted by send rate asc."""
@@ -168,6 +185,17 @@ class ClimbingStats:
         # Volume
         lines.append(f"- **Total envois** : {self.total_sends} blocs "
                      f"({self.total_flashes} flashés)")
+
+        # Time since the last ascent — important signal for how the coach
+        # should open the conversation (long break vs. active streak).
+        days = self.days_since_last_ascent
+        if days is not None:
+            if days == 0:
+                lines.append("- **Dernière séance** : aujourd'hui")
+            elif days == 1:
+                lines.append("- **Dernière séance** : hier")
+            else:
+                lines.append(f"- **Dernière séance** : il y a {days} jours")
 
         # Grade distribution
         if self.sends_by_grade:
@@ -289,6 +317,9 @@ class StatsBuilder:
 
         # Recent ascents
         stats.recent_ascents = self._recent_ascents(user_id, recent_n)
+        # _recent_ascents is ordered DESC, so index 0 is the single most
+        # recent ascent regardless of the recent_n truncation.
+        stats.last_ascent_at = stats.recent_ascents[0].detected_at if stats.recent_ascents else None
 
         # Unsent open boulders
         stats.unsent_by_grade = self._unsent_by_grade(sent_ids, gyms)
@@ -752,6 +783,9 @@ pas "quelques 5 et quelques 3")
 "tendu", "gainage"), pas "tes points forts" de façon générique
 - Si un envoi est rare ou notable (peu de grimpeurs l'ont envoyé, flash sur un bloc dur), \
 dis-le avec le chiffre exact si disponible
+- Si les statistiques indiquent que la dernière séance remonte à plusieurs semaines, \
+mentionne-le avec bienveillance et sans culpabilisation (ex: reprise en douceur), \
+jamais sur un ton de reproche. À l'inverse, une reprise rapprochée mérite d'être valorisée.
 Interdiction stricte d'inventer ou d'arrondir des chiffres non présents dans les stats : \
 si une donnée précise manque, formule la phrase sans elle plutôt que d'être approximatif.
 Termine en évoquant, sans les détailler, qu'il y a des pistes de travail possibles pour la suite \
