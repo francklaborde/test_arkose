@@ -51,11 +51,45 @@
 
     #planView { display: none; padding: 60px 16px 90px; }
     #planEmpty { color: #888; text-align: center; margin-top: 40px; }
-    .planBlock { background: #2a2a2a; border-radius: 14px; padding: 14px; margin-bottom: 12px; }
-    .planBlock .blockTitle { font-size: 14px; color: #888; margin-bottom: 8px; text-transform: uppercase; }
-    .planItem { padding: 8px 0; border-bottom: 1px solid #222; font-size: 15px; }
+
+    .planCard, .planGroup { background: #2a2a2a; border-radius: 14px; margin-bottom: 12px; overflow: hidden; }
+    .planGroup { background: #1c1c1c; border: 1px solid #292929; }
+    .planCard > summary, .planGroup > summary {
+      list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 14px;
+    }
+    .planCard > summary::-webkit-details-marker, .planGroup > summary::-webkit-details-marker { display: none; }
+    .chevron { color: #888; font-size: 11px; transition: transform 0.15s ease; flex-shrink: 0; }
+    details[open] > summary .chevron { transform: rotate(90deg); }
+    .planCardTitle { flex: 1; min-width: 0; }
+    .planCardTitle .value { font-size: 15px; font-weight: 600; }
+    .planCardTitle .meta { font-size: 12px; color: #888; margin-top: 2px; }
+    .planDeleteBtn { background: none; border: none; color: #888; font-size: 16px; padding: 4px 6px; flex-shrink: 0; }
+    .planCardBody { padding: 0 14px 14px; }
+    .planGroupBody { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 8px; }
+    .planGroupBody .planCard { margin-bottom: 0; }
+
+    .planBlock { background: #1f1f1f; border-radius: 10px; padding: 12px; margin-top: 10px; }
+    .planBlock .blockTitle { font-size: 12px; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.03em; }
+    .planItem { padding: 6px 0; border-bottom: 1px solid #292929; font-size: 14px; }
     .planItem:last-child { border-bottom: none; }
     .planItem .meta { color: #888; font-size: 12px; margin-top: 2px; }
+
+    .planProposal { max-width: 92%; border: 1px solid #3a3a3a; }
+    .proposalHeader { font-size: 13px; font-weight: 600; color: #9db4ff; margin-bottom: 8px; }
+    .proposalActions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+    .proposalBtn { flex: 1; min-width: 90px; padding: 10px 8px; border-radius: 10px; border: none; font-size: 13px; background: #1f1f1f; color: #eee; }
+    .proposalBtn.acceptBtn { background: #16a34a; color: #fff; }
+    .proposalBtn.rejectBtn { background: #3a1f1f; color: #f87171; }
+    .proposalBtn.saveBtn { background: #2563eb; color: #fff; }
+
+    .editTitle { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px; border: none; font-size: 14px; margin-bottom: 8px; background: #1f1f1f; color: #eee; }
+    .editSection .editItems { display: flex; flex-direction: column; gap: 8px; }
+    .editItem { background: #262626; border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .editItem input { box-sizing: border-box; width: 100%; padding: 8px; border-radius: 6px; border: none; font-size: 13px; background: #1f1f1f; color: #eee; }
+    .editRow { display: flex; gap: 6px; }
+    .editRow input { width: auto; }
+    .removeItemBtn { align-self: flex-end; background: none; border: none; color: #888; font-size: 14px; padding: 2px 6px; }
+    .addItemBtn { margin-top: 8px; width: 100%; padding: 8px; border-radius: 8px; border: 1px dashed #444; background: none; color: #888; font-size: 13px; }
   </style>
 </head>
 <body>
@@ -184,6 +218,7 @@ async function sendMessage() {
       body: JSON.stringify({ session_id: sessionId, message: text })
     });
     await streamIntoBubble(res, typingEl);
+    checkForNewPlans();
   } catch (e) {
     typingEl.remove();
     addMsg("❌ Erreur de connexion, réessaie.", "coach");
@@ -295,21 +330,92 @@ function planSectionHtml(title, items) {
   </div>`;
 }
 
-function renderPlan(plan) {
+// A single séance, collapsed by default — expand to see warmup/blocks/cooldown.
+function renderPlanCard(plan) {
+  const summaryBits = [];
+  if (plan.session_total) summaryBits.push(`Séance ${plan.session_index || "?"}/${plan.session_total}`);
+  if (plan.total_duration_min) summaryBits.push(`${plan.total_duration_min} min`);
+  return `
+    <details class="planCard">
+      <summary>
+        <span class="chevron">▸</span>
+        <div class="planCardTitle">
+          <div class="value">${plan.title}</div>
+          ${summaryBits.length ? `<div class="meta">${summaryBits.join(" · ")}</div>` : ""}
+        </div>
+        <button class="planDeleteBtn" data-plan-id="${plan.id}">✕</button>
+      </summary>
+      <div class="planCardBody">
+        ${planSectionHtml("Échauffement", plan.warmup)}
+        ${planSectionHtml("Séance", plan.blocks)}
+        ${planSectionHtml("Retour au calme", plan.cooldown)}
+      </div>
+    </details>
+  `;
+}
+
+// Séances sharing the same program_title (e.g. a 3-session build-up toward one
+// project) are gathered under a single expandable group instead of listed flat.
+function renderPlanGroup(programTitle, plans) {
+  const sorted = [...plans].sort((a, b) => (a.session_index || 0) - (b.session_index || 0));
+  return `
+    <details class="planGroup" open>
+      <summary>
+        <span class="chevron">▸</span>
+        <div class="planCardTitle">
+          <div class="value">${programTitle}</div>
+          <div class="meta">${plans.length} séance${plans.length > 1 ? "s" : ""}</div>
+        </div>
+      </summary>
+      <div class="planGroupBody">
+        ${sorted.map(renderPlanCard).join("")}
+      </div>
+    </details>
+  `;
+}
+
+function renderPlan(plans) {
   const el = document.getElementById("planView");
-  if (!plan) {
+  if (!plans || !plans.length) {
     el.innerHTML = "<div id='planEmpty'>Pas encore de séance proposée — parle d'un entraînement avec ton coach.</div>";
     return;
   }
-  el.innerHTML = `
-    <div class="levelCard">
-      <div class="label">${plan.title}</div>
-      <div class="value">${plan.total_duration_min ? plan.total_duration_min + " min" : ""}</div>
-    </div>
-    ${planSectionHtml("Échauffement", plan.warmup)}
-    ${planSectionHtml("Séance", plan.blocks)}
-    ${planSectionHtml("Retour au calme", plan.cooldown)}
-  `;
+
+  const groups = new Map(); // program_title -> plans[]
+  const standalone = [];
+  for (const p of plans) {
+    if (p.program_title) {
+      if (!groups.has(p.program_title)) groups.set(p.program_title, []);
+      groups.get(p.program_title).push(p);
+    } else {
+      standalone.push(p);
+    }
+  }
+
+  const latestOf = items => items.reduce((a, b) => (a.generated_at > b.generated_at ? a : b)).generated_at;
+  const entries = [
+    ...[...groups.entries()].map(([title, items]) => ({
+      html: renderPlanGroup(title, items),
+      sortKey: latestOf(items),
+    })),
+    ...standalone.map(p => ({ html: renderPlanCard(p), sortKey: p.generated_at })),
+  ].sort((a, b) => (a.sortKey < b.sortKey ? 1 : -1));
+
+  el.innerHTML = entries.map(e => e.html).join("");
+
+  el.querySelectorAll(".planDeleteBtn").forEach(btn => {
+    btn.onclick = (e) => {
+      e.preventDefault(); // don't toggle the <details> open state
+      deletePlan(btn.dataset.planId);
+    };
+  });
+}
+
+async function deletePlan(planId) {
+  try {
+    await fetch(`/session/plan/${planId}?session_id=${sessionId}`, { method: "DELETE" });
+  } catch (e) {}
+  loadPlan();
 }
 
 async function loadPlan() {
@@ -319,9 +425,184 @@ async function loadPlan() {
     const res = await fetch(`/session/plan?session_id=${sessionId}`);
     if (!res.ok) throw new Error("bad response");
     const data = await res.json();
-    renderPlan(data.plan);
+    renderPlan(data.plans);
   } catch (e) {
     el.innerHTML = "<div id='planEmpty'>❌ Impossible de charger le plan</div>";
+  }
+}
+
+// --- Plan proposals (inline in chat) ---
+const knownPlanIds = new Set();
+
+// Plan extraction (maybe_generate_plan) is a full extra LLM call that runs as a
+// background task after the chat reply has already streamed in, so it can easily
+// take several seconds longer than the reply itself — keep polling for a while
+// rather than giving up after one or two quick checks.
+const PLAN_POLL_INTERVAL_MS = 2000;
+const PLAN_POLL_MAX_ATTEMPTS = 20; // ~40s of coverage
+
+async function checkForNewPlans(attempt = 0) {
+  try {
+    const res = await fetch(`/session/plan?session_id=${sessionId}`);
+    if (res.ok) {
+      const data = await res.json();
+      const newPlans = (data.plans || []).filter(p => !knownPlanIds.has(p.id));
+      if (newPlans.length) {
+        newPlans.forEach(p => {
+          knownPlanIds.add(p.id);
+          addPlanProposal(p);
+        });
+        return;
+      }
+    }
+  } catch (e) {}
+  if (attempt < PLAN_POLL_MAX_ATTEMPTS) {
+    setTimeout(() => checkForNewPlans(attempt + 1), PLAN_POLL_INTERVAL_MS);
+  }
+}
+
+function addPlanProposal(plan) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "msg coach planProposal";
+  chatEl.appendChild(wrapper);
+  renderProposalView(wrapper, plan);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+function renderProposalView(wrapper, plan) {
+  const summaryBits = [];
+  if (plan.session_total) summaryBits.push(`Séance ${plan.session_index || "?"}/${plan.session_total}`);
+  if (plan.total_duration_min) summaryBits.push(`${plan.total_duration_min} min`);
+  wrapper.innerHTML = `
+    <div class="proposalHeader">📋 Nouveau plan proposé — tu en penses quoi ?</div>
+    <div class="planCardTitle">
+      <div class="value">${plan.title}</div>
+      ${summaryBits.length ? `<div class="meta">${summaryBits.join(" · ")}</div>` : ""}
+    </div>
+    ${planSectionHtml("Échauffement", plan.warmup)}
+    ${planSectionHtml("Séance", plan.blocks)}
+    ${planSectionHtml("Retour au calme", plan.cooldown)}
+    <div class="proposalActions">
+      <button class="proposalBtn acceptBtn">✅ Accepter</button>
+      <button class="proposalBtn editBtn">✏️ Modifier</button>
+      <button class="proposalBtn rejectBtn">✕ Refuser</button>
+    </div>
+  `;
+  wrapper.querySelector(".acceptBtn").onclick = () => {
+    wrapper.innerHTML = `<div class="proposalHeader">✅ Plan « ${plan.title} » ajouté à ton programme — tu le retrouves dans l'onglet Plan.</div>`;
+  };
+  wrapper.querySelector(".editBtn").onclick = () => showPlanEditForm(wrapper, plan);
+  wrapper.querySelector(".rejectBtn").onclick = () => rejectPlanProposal(wrapper, plan);
+}
+
+async function rejectPlanProposal(wrapper, plan) {
+  wrapper.innerHTML = `<div class="proposalHeader">Suppression...</div>`;
+  try {
+    await fetch(`/session/plan/${plan.id}?session_id=${sessionId}`, { method: "DELETE" });
+  } catch (e) {}
+  wrapper.innerHTML = `<div class="proposalHeader">✕ Plan « ${plan.title} » refusé.</div>`;
+}
+
+function editableItemHtml(item) {
+  const it = item || {};
+  return `<div class="editItem">
+    <input class="editName" value="${(it.name || "").replace(/"/g, "&quot;")}" placeholder="Nom de l'exercice" />
+    <div class="editRow">
+      <input class="editSets" type="number" value="${it.sets ?? ""}" placeholder="Séries" />
+      <input class="editReps" value="${(it.reps || "").replace(/"/g, "&quot;")}" placeholder="Reps" />
+      <input class="editDuration" type="number" value="${it.duration_min ?? ""}" placeholder="Min" />
+      <input class="editRest" type="number" value="${it.rest_sec ?? ""}" placeholder="Repos (s)" />
+    </div>
+    <input class="editNotes" value="${(it.notes || "").replace(/"/g, "&quot;")}" placeholder="Notes" />
+    <button class="removeItemBtn" type="button">🗑 Retirer</button>
+  </div>`;
+}
+
+function editSectionHtml(section, title, items) {
+  return `<div class="planBlock editSection" data-section="${section}">
+    <div class="blockTitle">${title}</div>
+    <div class="editItems">${(items || []).map(editableItemHtml).join("")}</div>
+    <button class="addItemBtn" type="button" data-section="${section}">+ Ajouter un exercice</button>
+  </div>`;
+}
+
+function wireEditItemRemoval(root) {
+  root.querySelectorAll(".removeItemBtn").forEach(btn => {
+    btn.onclick = () => btn.closest(".editItem").remove();
+  });
+}
+
+function showPlanEditForm(wrapper, plan) {
+  wrapper.innerHTML = `
+    <div class="proposalHeader">✏️ Modifie le plan avant de l'accepter</div>
+    <input class="editTitle" value="${plan.title.replace(/"/g, "&quot;")}" placeholder="Titre de la séance" />
+    ${editSectionHtml("warmup", "Échauffement", plan.warmup)}
+    ${editSectionHtml("blocks", "Séance", plan.blocks)}
+    ${editSectionHtml("cooldown", "Retour au calme", plan.cooldown)}
+    <div class="proposalActions">
+      <button class="proposalBtn saveBtn">💾 Enregistrer et accepter</button>
+      <button class="proposalBtn cancelBtn">Annuler</button>
+    </div>
+  `;
+  wireEditItemRemoval(wrapper);
+  wrapper.querySelectorAll(".addItemBtn").forEach(btn => {
+    btn.onclick = () => {
+      const section = btn.dataset.section;
+      const container = wrapper.querySelector(`.editSection[data-section="${section}"] .editItems`);
+      const div = document.createElement("div");
+      div.innerHTML = editableItemHtml({});
+      container.appendChild(div.firstElementChild);
+      wireEditItemRemoval(container);
+    };
+  });
+  wrapper.querySelector(".cancelBtn").onclick = () => renderProposalView(wrapper, plan);
+  wrapper.querySelector(".saveBtn").onclick = () => savePlanEdits(wrapper, plan);
+}
+
+function collectEditSection(wrapper, section) {
+  const items = [];
+  wrapper.querySelectorAll(`.editSection[data-section="${section}"] .editItem`).forEach(itemEl => {
+    const name = itemEl.querySelector(".editName").value.trim();
+    if (!name) return;
+    const sets = itemEl.querySelector(".editSets").value;
+    const reps = itemEl.querySelector(".editReps").value.trim();
+    const duration = itemEl.querySelector(".editDuration").value;
+    const rest = itemEl.querySelector(".editRest").value;
+    const notes = itemEl.querySelector(".editNotes").value.trim();
+    items.push({
+      name,
+      sets: sets ? parseInt(sets, 10) : null,
+      reps: reps || null,
+      duration_min: duration ? parseInt(duration, 10) : null,
+      rest_sec: rest ? parseInt(rest, 10) : null,
+      notes,
+    });
+  });
+  return items;
+}
+
+async function savePlanEdits(wrapper, plan) {
+  const title = wrapper.querySelector(".editTitle").value.trim() || plan.title;
+  const body = {
+    title,
+    warmup: collectEditSection(wrapper, "warmup"),
+    blocks: collectEditSection(wrapper, "blocks"),
+    cooldown: collectEditSection(wrapper, "cooldown"),
+  };
+  wrapper.innerHTML = `<div class="proposalHeader">Enregistrement...</div>`;
+  try {
+    const res = await fetch(`/session/plan/${plan.id}?session_id=${sessionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error("bad response");
+    const data = await res.json();
+    wrapper.innerHTML = `<div class="proposalHeader">✅ Plan « ${data.plan.title} » modifié et ajouté à ton programme.</div>`;
+  } catch (e) {
+    wrapper.innerHTML = `<div class="proposalHeader">❌ Impossible d'enregistrer les modifications.</div>
+      <div class="proposalActions"><button class="proposalBtn retryBtn">Réessayer</button></div>`;
+    wrapper.querySelector(".retryBtn").onclick = () => showPlanEditForm(wrapper, plan);
   }
 }
 

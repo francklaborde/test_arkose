@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum
@@ -628,11 +629,21 @@ class SessionPlan:
     cooldown: list[PlanBlock] = field(default_factory=list)
     total_duration_min: Optional[int] = None
     equipment_used: list[str] = field(default_factory=list)
+    # Set when this plan is one session of a multi-session program
+    # (e.g. a 3-session build-up toward a specific project).
+    program_title: Optional[str] = None
+    session_index: Optional[int] = None
+    session_total: Optional[int] = None
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     generated_at: str = field(default_factory=_now_iso)
 
     def to_dict(self) -> dict:
         return {
+            "id": self.id,
             "title": self.title,
+            "program_title": self.program_title,
+            "session_index": self.session_index,
+            "session_total": self.session_total,
             "warmup": [b.to_dict() for b in self.warmup],
             "blocks": [b.to_dict() for b in self.blocks],
             "cooldown": [b.to_dict() for b in self.cooldown],
@@ -647,6 +658,9 @@ class SessionPlan:
             return [PlanBlock(**b) for b in (data.get(key) or [])]
         return cls(
             title=data.get("title") or "Séance",
+            program_title=data.get("program_title") or None,
+            session_index=data.get("session_index"),
+            session_total=data.get("session_total"),
             warmup=_blocks("warmup"),
             blocks=_blocks("blocks"),
             cooldown=_blocks("cooldown"),
@@ -798,37 +812,52 @@ Retourne UNIQUEMENT un objet JSON valide avec les champs suivants \
     # ------------------------------------------------------------------
 
     PLAN_PROMPT = """Tu es un extracteur qui transforme une conversation de coaching \
-escalade en plan de séance structuré, UNIQUEMENT si la conversation contient assez \
-d'éléments concrets pour ça (le grimpeur a demandé un programme, une séance, un \
-entraînement à faire, avec ou sans accès à une salle d'escalade).
+escalade en un ou plusieurs plans de séance structurés.
 
-Si ce n'est PAS le cas (simple discussion, question ponctuelle, pas de séance \
-concrète évoquée), retourne exactement : {"plan": null}
+Un "plan" peut être :
+- une séance ponctuelle (échauffement / bloc principal / retour au calme)
+- une séance faisant partie d'un programme à plusieurs séances (ex: préparer \
+un projet précis sur 3 séances) — dans ce cas renseigne "program_title" \
+(même titre de programme pour toutes les séances qui le composent), \
+"session_index" et "session_total"
+- une routine complémentaire à faire en parallèle de l'escalade (ex: tractions, \
+gainage à la maison) — dans ce cas laisse "program_title" à null
 
-Si c'est le cas, retourne UNIQUEMENT un objet JSON valide, sans texte avant/après, \
-sans balises markdown, au format :
+La liste des plans déjà enregistrés pour ce grimpeur est fournie dans le \
+contexte ci-dessous. Ne les ré-extrait JAMAIS. N'extrait que les plans NOUVEAUX \
+qui apparaissent dans la conversation ci-dessous et qui ne sont pas déjà dans \
+cette liste.
+
+Si aucun plan nouveau n'apparaît, retourne exactement : {"plans": []}
+
+Sinon, retourne UNIQUEMENT un objet JSON valide, sans texte avant/après, sans \
+balises markdown, au format :
 
 {
-  "plan": {
-    "title": string,
-    "warmup": [ { "name": string, "duration_min": int, "notes": string } ],
-    "blocks": [ { "name": string, "sets": int, "reps": string, "duration_min": int, \
+  "plans": [
+    {
+      "title": string,
+      "program_title": string ou null,
+      "session_index": int ou null,
+      "session_total": int ou null,
+      "warmup": [ { "name": string, "duration_min": int, "notes": string } ],
+      "blocks": [ { "name": string, "sets": int, "reps": string, "duration_min": int, \
 "rest_sec": int, "notes": string } ],
-    "cooldown": [ { "name": string, "duration_min": int, "notes": string } ],
-    "total_duration_min": int,
-    "equipment_used": [string]
-  }
+      "cooldown": [ { "name": string, "duration_min": int, "notes": string } ],
+      "total_duration_min": int,
+      "equipment_used": [string]
+    }
+  ]
 }
 
 Règles :
-- Adapte les exercices au matériel réellement disponible pour le grimpeur (donné \
-dans le contexte ci-dessous). S'il n'a pas accès à une salle, ne propose ni bloc \
-ni voie : uniquement des exercices de préparation physique, mobilité, doigts \
-(si poutre disponible), gainage, etc.
-- Respecte strictement les blessures actives listées dans le profil — n'inclus \
-jamais un exercice contre-indiqué.
-- N'invente pas de contraintes non mentionnées ; base-toi uniquement sur la \
-conversation et le profil.
+- Si la conversation décrit un programme sur plusieurs séances en une fois, \
+extrait TOUTES les séances du programme d'un coup (un objet par séance dans "plans").
+- Adapte les exercices au matériel réellement disponible (donné dans le contexte \
+ci-dessous). Sans accès salle : uniquement préparation physique, mobilité, \
+doigts (si poutre disponible), gainage, etc. — jamais de bloc ni de voie.
+- Respecte strictement les blessures actives listées dans le profil.
+- N'invente pas de contraintes non mentionnées.
 - Chaque champ numérique manquant doit être omis plutôt qu'inventé au hasard.
 - "reps" est une chaîne libre (ex: "8-10", "max", "3x échec").
 """
@@ -858,10 +887,19 @@ conversation et le profil.
     def extraction_system(self) -> str:
         return self.EXTRACTION_PROMPT
 
-    def plan_system(self, profile: Optional[ClimberProfile] = None) -> str:
+    def plan_system(
+        self,
+        profile: Optional[ClimberProfile] = None,
+        known_plans: Optional[list[str]] = None,
+    ) -> str:
         parts = [self.PLAN_PROMPT]
         if profile:
             parts.append(profile.to_llm_context())
+        if known_plans:
+            listing = "\n".join(f"- {t}" for t in known_plans)
+        else:
+            listing = "Aucun pour l'instant."
+        parts.append(f"## Plans déjà enregistrés (ne pas les ré-extraire)\n{listing}")
         return "\n\n".join(parts)
 
     # ------------------------------------------------------------------
@@ -1055,7 +1093,7 @@ class ClimbingCoach:
         self.prompt_builder = PromptBuilder()
         self.mode: Optional[CoachMode] = None
         self.auto_sync = auto_sync
-        self.last_plan: Optional[SessionPlan] = None
+        self.plans: list[SessionPlan] = []
 
         # StatsBuilder is optional — works without a DB
         self._stats_builder: Optional[StatsBuilder] = None
@@ -1175,19 +1213,23 @@ class ClimbingCoach:
     # Session plan
     # ------------------------------------------------------------------
 
-    def maybe_generate_plan(self) -> Optional[SessionPlan]:
+    def maybe_generate_plan(self) -> list[SessionPlan]:
         """
-        One-shot call that inspects the recent conversation and, if it describes
-        a concrete training session, extracts it as a structured SessionPlan.
-        Overwrites self.last_plan (set to None if no session is currently
-        described). Cheap to call after every coaching turn.
+        One-shot call that inspects the recent conversation and extracts any NEW
+        concrete training session(s) as SessionPlan objects, appended to
+        self.plans. Already-known plan titles are passed back to the model so
+        it doesn't re-extract them — safe to call after every coaching turn.
         """
         if self.mode != CoachMode.COACHING:
-            return None
+            return []
 
         transcript = self._history_to_transcript(last_n=8)
+        known_titles = [
+            f"{p.program_title + ' — ' if p.program_title else ''}{p.title}"
+            for p in self.plans
+        ]
         raw = self.llm.call_once(
-            system=self.prompt_builder.plan_system(self.profile),
+            system=self.prompt_builder.plan_system(self.profile, known_plans=known_titles),
             user_message=f"Conversation récente :\n\n{transcript}",
         )
 
@@ -1202,17 +1244,15 @@ class ClimbingCoach:
             data = json.loads(clean)
         except json.JSONDecodeError:
             log.warning("Plan extraction returned invalid JSON, ignoring")
-            return None
+            return []
 
-        plan_data = data.get("plan")
-        if not plan_data:
-            self.last_plan = None
-            return None
-
-        plan = SessionPlan.from_dict(plan_data)
-        self.last_plan = plan
-        log.info("Session plan generated: %r", plan.title)
-        return plan
+        new_plans = []
+        for plan_data in data.get("plans") or []:
+            plan = SessionPlan.from_dict(plan_data)
+            self.plans.append(plan)
+            new_plans.append(plan)
+            log.info("Session plan added: %r", plan.title)
+        return new_plans
 
     # ------------------------------------------------------------------
     # Onboarding extraction

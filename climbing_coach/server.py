@@ -8,7 +8,7 @@ from pydantic import BaseModel
 import uuid
 from typing import Optional
 
-from src.climbing_coach import ClimbingCoach, CoachMode
+from src.climbing_coach import ClimbingCoach, CoachMode, PlanBlock
 from src.climber_profile import ClimberProfile
 from src.sboulder_collector import setup_logging
 
@@ -24,6 +24,20 @@ class ChatRequest(BaseModel):
 
 class SyncRequest(BaseModel):
     session_id: str
+
+class PlanBlockEdit(BaseModel):
+    name: str
+    sets: Optional[int] = None
+    reps: Optional[str] = None
+    duration_min: Optional[int] = None
+    rest_sec: Optional[int] = None
+    notes: str = ""
+
+class PlanEditRequest(BaseModel):
+    title: Optional[str] = None
+    warmup: Optional[list[PlanBlockEdit]] = None
+    blocks: Optional[list[PlanBlockEdit]] = None
+    cooldown: Optional[list[PlanBlockEdit]] = None
 
 def _get_last_sync(coach: ClimbingCoach) -> Optional[str]:
     stats = coach.get_stats()
@@ -111,7 +125,36 @@ def get_plan(session_id: str):
     coach = sessions.get(session_id)
     if not coach:
         raise HTTPException(status_code=404, detail="Session not found")
-    return {"plan": coach.last_plan.to_dict() if coach.last_plan else None}
+    return {"plans": [p.to_dict() for p in coach.plans]}
+
+@app.delete("/session/plan/{plan_id}")
+def delete_plan(plan_id: str, session_id: str):
+    coach = sessions.get(session_id)
+    if not coach:
+        raise HTTPException(status_code=404, detail="Session not found")
+    before = len(coach.plans)
+    coach.plans = [p for p in coach.plans if p.id != plan_id]
+    if len(coach.plans) == before:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    return {"status": "ok"}
+
+@app.patch("/session/plan/{plan_id}")
+def edit_plan(plan_id: str, req: PlanEditRequest, session_id: str):
+    coach = sessions.get(session_id)
+    if not coach:
+        raise HTTPException(status_code=404, detail="Session not found")
+    plan = next((p for p in coach.plans if p.id == plan_id), None)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    if req.title is not None:
+        plan.title = req.title
+    if req.warmup is not None:
+        plan.warmup = [PlanBlock(**b.model_dump()) for b in req.warmup]
+    if req.blocks is not None:
+        plan.blocks = [PlanBlock(**b.model_dump()) for b in req.blocks]
+    if req.cooldown is not None:
+        plan.cooldown = [PlanBlock(**b.model_dump()) for b in req.cooldown]
+    return {"status": "ok", "plan": plan.to_dict()}
 
 # --- Serve manifest.json, sw.js, icons, etc. at root paths ---
 app.mount("/", StaticFiles(directory=Path(__file__).parent), name="static")
