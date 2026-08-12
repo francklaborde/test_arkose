@@ -1,0 +1,1089 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Climbing Coach</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#111111">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Climbing Coach">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+  <style>
+    body { font-family: -apple-system, sans-serif; margin: 0; padding: 0; background: #111; color: #eee; }
+    #chat { padding: 12px; padding-bottom: 90px; }
+    .msg { margin: 8px 0; padding: 10px 14px; border-radius: 14px; max-width: 80%; line-height: 1.4; }
+    .msg p { margin: 0 0 8px 0; }
+    .msg p:last-child { margin-bottom: 0; }
+    .msg ul, .msg ol { margin: 4px 0; padding-left: 20px; }
+    .msg strong { color: #fff; }
+    .user { background: #2563eb; margin-left: auto; }
+    .coach { background: #2a2a2a; }
+    .coach.typing { display: flex; gap: 4px; align-items: center; padding: 14px; }
+    .coach.typing .dot { width: 6px; height: 6px; border-radius: 50%; background: #888; animation: bounce 1.2s infinite; }
+    .coach.typing .dot:nth-child(2) { animation-delay: 0.15s; }
+    .coach.typing .dot:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-4px); opacity: 1; } }
+    #inputBar { position: fixed; bottom: 0; left: 0; right: 0; display: flex; padding: 10px; background: #111; }
+    #msgInput { flex: 1; padding: 12px; border-radius: 20px; border: none; font-size: 16px; }
+    #sendBtn { margin-left: 8px; padding: 12px 18px; border-radius: 20px; border: none; background: #2563eb; color: white; }
+    #topBar { position: fixed; top: 0; left: 0; right: 0; display: flex; justify-content: flex-end; padding: 8px 12px; background: #111; z-index: 10; }
+    #syncBtn { padding: 6px 12px; border-radius: 14px; border: none; background: #2a2a2a; color: #eee; font-size: 13px; }
+    #syncBtn:disabled { opacity: 0.5; }
+    #chat { padding-top: 48px; }
+    #lastSync { font-size: 12px; color: #888; margin-right: 10px; align-self: center; }
+
+    #topBar { justify-content: space-between; align-items: center; }
+    #tabs { display: flex; gap: 4px; }
+    .tabBtn { padding: 6px 14px; border-radius: 14px; border: none; background: transparent; color: #888; font-size: 14px; }
+    .tabBtn.active { background: #2a2a2a; color: #eee; }
+    #topBarRight { display: flex; align-items: center; }
+
+    #modeBar { position: fixed; top: 46px; left: 0; right: 0; z-index: 9; background: #161616; padding: 6px 12px; border-bottom: 1px solid #262626; display: flex; flex-direction: column; gap: 6px; }
+    #modeToggle { display: flex; gap: 6px; }
+    .modeBtn { padding: 5px 12px; border-radius: 12px; border: 1px solid #333; background: transparent; color: #888; font-size: 12px; }
+    .modeBtn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+    #onboardingSaveBar { display: none; gap: 8px; align-items: center; flex-wrap: wrap; }
+    #onboardingSaveBar input { flex: 1; min-width: 160px; padding: 8px 10px; border-radius: 10px; border: 1px solid #333; background: #1a1a1a; color: #eee; font-size: 13px; }
+    #onboardingSaveBar button { padding: 8px 12px; border-radius: 10px; border: none; background: #16a34a; color: #fff; font-size: 13px; white-space: nowrap; }
+    #onboardingSaveStatus { font-size: 12px; color: #888; }
+    body.onboarding-mode #onboardingSaveBar { display: flex; }
+    body.onboarding-mode #syncBtn, body.onboarding-mode #lastSync { display: none; }
+
+    #chat { padding-top: 88px; }
+    body.onboarding-mode #chat { padding-top: 160px; }
+
+    #statsView { display: none; padding: 100px 16px 90px; }
+    body.onboarding-mode #statsView { padding-top: 170px; }
+    .levelCard { background: #2a2a2a; border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+    .levelCard .label { font-size: 13px; color: #888; margin-bottom: 4px; }
+    .levelCard .value { font-size: 20px; font-weight: 600; }
+    .statRow { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #222; font-size: 14px; }
+    .statRow:last-child { border-bottom: none; }
+    #statsEmpty { color: #888; text-align: center; margin-top: 40px; }
+
+    #planView { display: none; padding: 100px 16px 90px; }
+    body.onboarding-mode #planView { padding-top: 170px; }
+    #planEmpty { color: #888; text-align: center; margin-top: 40px; }
+
+    .planCard, .planGroup { background: #2a2a2a; border-radius: 14px; margin-bottom: 12px; overflow: hidden; }
+    .planGroup { background: #1c1c1c; border: 1px solid #292929; }
+    .planCard > summary, .planGroup > summary {
+      list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: 14px;
+    }
+    .planCard > summary::-webkit-details-marker, .planGroup > summary::-webkit-details-marker { display: none; }
+    .chevron { color: #888; font-size: 11px; transition: transform 0.15s ease; flex-shrink: 0; }
+    details[open] > summary .chevron { transform: rotate(90deg); }
+    .planCardTitle { flex: 1; min-width: 0; }
+    .planCardTitle .value { font-size: 15px; font-weight: 600; }
+    .planCardTitle .meta { font-size: 12px; color: #888; margin-top: 2px; }
+    .planDeleteBtn { background: none; border: none; color: #888; font-size: 16px; padding: 4px 6px; flex-shrink: 0; }
+    .planCardBody { padding: 0 14px 14px; }
+    .planGroupBody { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 8px; }
+    .planGroupBody .planCard { margin-bottom: 0; }
+
+    .planBlock { background: #1f1f1f; border-radius: 10px; padding: 12px; margin-top: 10px; }
+    .planBlock .blockTitle { font-size: 12px; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.03em; }
+    .planItem { padding: 6px 0; border-bottom: 1px solid #292929; font-size: 14px; }
+    .planItem:last-child { border-bottom: none; }
+    .planItem .meta { color: #888; font-size: 12px; margin-top: 2px; }
+
+    .planProposal { max-width: 92%; border: 1px solid #3a3a3a; }
+    .proposalHeader { font-size: 13px; font-weight: 600; color: #9db4ff; margin-bottom: 8px; }
+    .proposalActions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+    .proposalBtn { flex: 1; min-width: 90px; padding: 10px 8px; border-radius: 10px; border: none; font-size: 13px; background: #1f1f1f; color: #eee; }
+    .proposalBtn.acceptBtn { background: #16a34a; color: #fff; }
+    .proposalBtn.rejectBtn { background: #3a1f1f; color: #f87171; }
+    .proposalBtn.saveBtn { background: #2563eb; color: #fff; }
+
+    .editTitle { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px; border: none; font-size: 14px; margin-bottom: 8px; background: #1f1f1f; color: #eee; }
+    .editSection .editItems { display: flex; flex-direction: column; gap: 8px; }
+    .editItem { background: #262626; border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .editItem input { box-sizing: border-box; width: 100%; padding: 8px; border-radius: 6px; border: none; font-size: 13px; background: #1f1f1f; color: #eee; }
+    .editRow { display: flex; gap: 6px; }
+    .editRow input { width: auto; }
+    .removeItemBtn { align-self: flex-end; background: none; border: none; color: #888; font-size: 14px; padding: 2px 6px; }
+    .addItemBtn { margin-top: 8px; width: 100%; padding: 8px; border-radius: 8px; border: 1px dashed #444; background: none; color: #888; font-size: 13px; }
+
+    #profileView { display: none; padding: 100px 16px 100px; }
+    body.onboarding-mode #profileView { padding-top: 170px; }
+    #profileEmpty { color: #888; text-align: center; margin-top: 40px; }
+    .formSection { background: #2a2a2a; border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+    .formSection .sectionTitle { font-size: 13px; color: #888; margin-bottom: 10px; text-transform: uppercase; }
+    .formRow { margin-bottom: 10px; }
+    .formRow label { display: block; font-size: 13px; color: #aaa; margin-bottom: 4px; }
+    .formRow input, .formRow textarea, .formRow select {
+      width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px;
+      border: 1px solid #333; background: #1a1a1a; color: #eee; font-size: 15px;
+    }
+    .formRow input:disabled { color: #777; }
+    .formRow textarea { resize: vertical; min-height: 50px; font-family: inherit; }
+    .formRow .hint { font-size: 11px; color: #666; margin-top: 3px; }
+    .formGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .gymChips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .gymChip {
+      display: inline-flex; align-items: center; gap: 6px; padding: 6px 6px 6px 14px; border-radius: 20px;
+      background: #2563eb; color: #fff; font-size: 13px;
+    }
+    .gymRemoveBtn {
+      background: rgba(255,255,255,0.18); border: none; color: #fff; width: 18px; height: 18px;
+      border-radius: 50%; font-size: 13px; line-height: 1; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; padding: 0;
+    }
+    .gymRemoveBtn:hover { background: rgba(255,255,255,0.32); }
+    #gymAddRow select {
+      width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px;
+      border: 1px solid #333; background: #1a1a1a; color: #eee; font-size: 15px;
+    }
+    .injuryCard { background: #1a1a1a; border-radius: 10px; padding: 10px; margin-bottom: 8px; }
+    .injuryCard .injuryTop { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .injuryCard input[type="text"] { margin-top: 6px; }
+    .addBtn { background: #2a2a2a; border: 1px dashed #444; color: #aaa; border-radius: 8px; padding: 10px; width: 100%; font-size: 14px; }
+    .removeBtn { background: none; border: none; color: #888; font-size: 16px; }
+    #profileSaveBar { padding-top: 4px; }
+    #profileSaveBtn { width: 100%; padding: 12px; border-radius: 12px; border: none; background: #2563eb; color: white; font-size: 15px; }
+    #profileSaveStatus { text-align: center; margin-top: 8px; color: #888; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div id="topBar">
+    <div id="tabs">
+      <button class="tabBtn active" id="tabChat">Chat</button>
+      <button class="tabBtn" id="tabStats">Stats</button>
+      <button class="tabBtn" id="tabPlan">Plan</button>
+      <button class="tabBtn" id="tabProfile">Profil</button>
+    </div>
+    <div id="topBarRight">
+      <span id="lastSync"></span>
+      <button id="syncBtn">🔄 Synchroniser</button>
+    </div>
+  </div>
+  <div id="modeBar">
+    <div id="modeToggle">
+      <button class="modeBtn active" id="modeCoachingBtn">Coaching</button>
+      <button class="modeBtn" id="modeOnboardingBtn">Onboarding</button>
+    </div>
+    <div id="onboardingSaveBar">
+      <input id="profilePathInput" value="C:\Users\Franc\OneDrive\Documents\GitHub\test_arkose\database\franck.json" placeholder="Chemin de sauvegarde du profil" />
+      <button id="saveProfileBtn">💾 Enregistrer le profil</button>
+      <span id="onboardingSaveStatus"></span>
+    </div>
+  </div>
+  <div id="chat"></div>
+  <div id="statsView">
+    <div id="statsEmpty">Chargement...</div>
+  </div>
+  <div id="planView">
+    <div id="planEmpty">Chargement...</div>
+  </div>
+  <div id="profileView">
+    <div id="profileEmpty">Chargement...</div>
+  </div>
+  <div id="inputBar">
+    <input id="msgInput" placeholder="Écris à ton coach..." />
+    <button id="sendBtn">Envoyer</button>
+  </div>
+
+<script>
+let sessionId = null;
+const chatEl = document.getElementById("chat");
+
+function formatLastSync(iso) {
+  if (!iso) return "Jamais synchronisé";
+  const d = new Date(iso);
+  return "Dernière sync : " + d.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function updateLastSync(iso) {
+  document.getElementById("lastSync").textContent = formatLastSync(iso);
+}
+
+function addMsg(text, who) {
+  const div = document.createElement("div");
+  div.className = "msg " + who;
+  if (who === "coach") {
+    div.innerHTML = marked.parse(text);
+  } else {
+    div.textContent = text;
+  }
+  chatEl.appendChild(div);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+function addTyping() {
+  const div = document.createElement("div");
+  div.className = "msg coach typing";
+  div.innerHTML = "<span class='dot'></span><span class='dot'></span><span class='dot'></span>";
+  chatEl.appendChild(div);
+  window.scrollTo(0, document.body.scrollHeight);
+  return div;
+}
+
+// Bumped every time a session (re)starts. In-flight streams from a
+// superseded session (e.g. a mode switch that happened mid-stream) check
+// this before touching the DOM so a stray late chunk can't land in the
+// wrong conversation. activeAbortController lets us also cancel the actual
+// in-flight fetch instead of just letting it dangle.
+let sessionToken = 0;
+let activeAbortController = null;
+
+// Reads a streaming text/plain response, filling a coach bubble as chunks arrive.
+// Renders plain text while streaming (partial markdown can produce broken HTML),
+// then swaps to the fully rendered markdown once the stream closes.
+async function streamIntoBubble(res, typingEl, myToken) {
+  if (!res.ok || !res.body) throw new Error("bad response");
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let full = "";
+  let msgDiv = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (myToken !== sessionToken) return; // superseded by a newer session/mode
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    if (!chunk) continue;
+    if (!msgDiv) {
+      typingEl.remove();
+      msgDiv = document.createElement("div");
+      msgDiv.className = "msg coach";
+      chatEl.appendChild(msgDiv);
+    }
+    full += chunk;
+    msgDiv.textContent = full;
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  if (msgDiv) {
+    msgDiv.innerHTML = marked.parse(full);
+  } else {
+    typingEl.remove();
+    addMsg("(réponse vide)", "coach");
+  }
+}
+
+async function startSession() {
+  const myToken = ++sessionToken;
+  if (activeAbortController) activeAbortController.abort();
+  const controller = new AbortController();
+  activeAbortController = controller;
+
+  const typingEl = addTyping();
+  try {
+    const res = await fetch("/session/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: currentMode }),
+      signal: controller.signal
+    });
+    if (myToken !== sessionToken) return; // a newer session started while we awaited
+    if (!res.ok) throw new Error("bad response");
+    sessionId = res.headers.get("X-Session-Id");
+    updateLastSync(res.headers.get("X-Last-Sync"));
+    await streamIntoBubble(res, typingEl, myToken);
+  } catch (e) {
+    if (myToken !== sessionToken) return; // superseded — ignore the abort error
+    typingEl.remove();
+    addMsg("❌ Impossible de démarrer la session, réessaie.", "coach");
+  }
+}
+
+// --- Mode selector (test the onboarding vs. coaching prompt) ---
+let currentMode = "coaching";
+
+function setMode(mode) {
+  if (mode === currentMode) return;
+  currentMode = mode;
+  document.getElementById("modeCoachingBtn").classList.toggle("active", mode === "coaching");
+  document.getElementById("modeOnboardingBtn").classList.toggle("active", mode === "onboarding");
+  document.body.classList.toggle("onboarding-mode", mode === "onboarding");
+  document.getElementById("onboardingSaveStatus").textContent = "";
+  chatEl.innerHTML = "";
+  startSession();
+}
+
+document.getElementById("modeCoachingBtn").onclick = () => setMode("coaching");
+document.getElementById("modeOnboardingBtn").onclick = () => setMode("onboarding");
+
+// After an onboarding conversation, extract the profile from the transcript
+// and write it to whatever path the user typed in.
+async function saveOnboardingProfile() {
+  const input = document.getElementById("profilePathInput");
+  const btn = document.getElementById("saveProfileBtn");
+  const status = document.getElementById("onboardingSaveStatus");
+  const path = input.value.trim();
+  if (!path) {
+    status.textContent = "⚠️ Indique un chemin de fichier";
+    return;
+  }
+  if (!sessionId) {
+    status.textContent = "⚠️ Session non démarrée";
+    return;
+  }
+  btn.disabled = true;
+  status.textContent = "Extraction du profil...";
+  try {
+    const res = await fetch("/session/onboarding/finish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, profile_path: path })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "bad response");
+    status.textContent = `✅ Profil enregistré → ${data.profile_path}`;
+  } catch (e) {
+    status.textContent = `❌ ${e.message}`;
+  }
+  btn.disabled = false;
+}
+
+document.getElementById("saveProfileBtn").onclick = saveOnboardingProfile;
+
+async function sendMessage() {
+  const input = document.getElementById("msgInput");
+  const sendBtn = document.getElementById("sendBtn");
+  const text = input.value.trim();
+  if (!text) return;
+  addMsg(text, "user");
+  input.value = "";
+  input.disabled = true;
+  sendBtn.disabled = true;
+
+  const myToken = sessionToken;
+  const controller = new AbortController();
+  activeAbortController = controller;
+
+  const typingEl = addTyping();
+  try {
+    const res = await fetch("/session/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, message: text }),
+      signal: controller.signal
+    });
+    await streamIntoBubble(res, typingEl, myToken);
+    if (myToken === sessionToken) checkForNewPlans();
+  } catch (e) {
+    if (myToken !== sessionToken) return; // mode was switched mid-message — ignore
+    typingEl.remove();
+    addMsg("❌ Erreur de connexion, réessaie.", "coach");
+  } finally {
+    if (myToken === sessionToken) {
+      input.disabled = false;
+      sendBtn.disabled = false;
+      input.focus();
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+  }
+}
+
+async function syncNow() {
+  const btn = document.getElementById("syncBtn");
+  btn.disabled = true;
+  btn.textContent = "Synchronisation...";
+  try {
+    const res = await fetch("/session/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId })
+    });
+    const data = await res.json();
+    btn.textContent = res.ok ? "✅ Synchronisé" : "❌ Erreur";
+    if (res.ok) updateLastSync(data.last_sync);
+  } catch (e) {
+    btn.textContent = "❌ Erreur";
+  }
+  setTimeout(() => {
+    btn.textContent = "🔄 Synchroniser";
+    btn.disabled = false;
+  }, 2000);
+}
+
+document.getElementById("syncBtn").onclick = syncNow;
+document.getElementById("sendBtn").onclick = sendMessage;
+document.getElementById("msgInput").addEventListener("keypress", e => {
+  if (e.key === "Enter") sendMessage();
+});
+
+// --- Stats tab ---
+let statsLoaded = false;
+
+function gradeTableHtml(byGrade) {
+  const entries = Object.entries(byGrade || {});
+  if (!entries.length) return "<div class='statRow'><span>Aucune donnée</span></div>";
+  return entries.map(([grade, count]) =>
+    `<div class="statRow"><span>${grade}</span><span>${count}</span></div>`
+  ).join("");
+}
+
+function renderStats(data) {
+  const el = document.getElementById("statsView");
+  el.innerHTML = `
+    <div class="levelCard">
+      <div class="label">Niveau actuel (redpoint)</div>
+      <div class="value">${data.current_level || "Pas encore assez de données"}</div>
+    </div>
+    <div class="levelCard">
+      <div class="label">Niveau actuel (flash)</div>
+      <div class="value">${data.current_flash_level || "Pas encore assez de données"}</div>
+    </div>
+    <div class="levelCard">
+      <div class="label">Total</div>
+      <div class="value">${data.total_sends} envois · ${data.total_flashes} flashs</div>
+    </div>
+    <div class="levelCard">
+      <div class="label">Répartition par niveau (envois)</div>
+      ${gradeTableHtml(data.sends_by_grade)}
+    </div>
+    <div class="levelCard">
+      <div class="label">Répartition par niveau (flashs)</div>
+      ${gradeTableHtml(data.flashes_by_grade)}
+    </div>
+  `;
+}
+
+async function loadStats() {
+  const el = document.getElementById("statsView");
+  el.innerHTML = "<div id='statsEmpty'>Chargement...</div>";
+  try {
+    const res = await fetch(`/session/stats?session_id=${sessionId}`);
+    if (!res.ok) throw new Error("bad response");
+    const data = await res.json();
+    renderStats(data);
+  } catch (e) {
+    el.innerHTML = "<div id='statsEmpty'>❌ Impossible de charger les stats</div>";
+  }
+}
+
+// --- Plan tab ---
+function planItemHtml(item) {
+  const meta = [];
+  if (item.sets) meta.push(`${item.sets} séries`);
+  if (item.reps) meta.push(item.reps);
+  if (item.duration_min) meta.push(`${item.duration_min} min`);
+  if (item.rest_sec) meta.push(`repos ${item.rest_sec}s`);
+  return `<div class="planItem">
+    <div>${item.name}</div>
+    ${meta.length ? `<div class="meta">${meta.join(" · ")}</div>` : ""}
+    ${item.notes ? `<div class="meta">${item.notes}</div>` : ""}
+  </div>`;
+}
+
+function planSectionHtml(title, items) {
+  if (!items || !items.length) return "";
+  return `<div class="planBlock">
+    <div class="blockTitle">${title}</div>
+    ${items.map(planItemHtml).join("")}
+  </div>`;
+}
+
+// A single séance, collapsed by default — expand to see warmup/blocks/cooldown.
+function renderPlanCard(plan) {
+  const summaryBits = [];
+  if (plan.session_total) summaryBits.push(`Séance ${plan.session_index || "?"}/${plan.session_total}`);
+  if (plan.total_duration_min) summaryBits.push(`${plan.total_duration_min} min`);
+  return `
+    <details class="planCard">
+      <summary>
+        <span class="chevron">▸</span>
+        <div class="planCardTitle">
+          <div class="value">${plan.title}</div>
+          ${summaryBits.length ? `<div class="meta">${summaryBits.join(" · ")}</div>` : ""}
+        </div>
+        <button class="planDeleteBtn" data-plan-id="${plan.id}">✕</button>
+      </summary>
+      <div class="planCardBody">
+        ${planSectionHtml("Échauffement", plan.warmup)}
+        ${planSectionHtml("Séance", plan.blocks)}
+        ${planSectionHtml("Retour au calme", plan.cooldown)}
+      </div>
+    </details>
+  `;
+}
+
+// Séances sharing the same program_title (e.g. a 3-session build-up toward one
+// project) are gathered under a single expandable group instead of listed flat.
+function renderPlanGroup(programTitle, plans) {
+  const sorted = [...plans].sort((a, b) => (a.session_index || 0) - (b.session_index || 0));
+  return `
+    <details class="planGroup" open>
+      <summary>
+        <span class="chevron">▸</span>
+        <div class="planCardTitle">
+          <div class="value">${programTitle}</div>
+          <div class="meta">${plans.length} séance${plans.length > 1 ? "s" : ""}</div>
+        </div>
+      </summary>
+      <div class="planGroupBody">
+        ${sorted.map(renderPlanCard).join("")}
+      </div>
+    </details>
+  `;
+}
+
+function renderPlan(plans) {
+  const el = document.getElementById("planView");
+  if (!plans || !plans.length) {
+    el.innerHTML = "<div id='planEmpty'>Pas encore de séance proposée — parle d'un entraînement avec ton coach.</div>";
+    return;
+  }
+
+  const groups = new Map(); // program_title -> plans[]
+  const standalone = [];
+  for (const p of plans) {
+    if (p.program_title) {
+      if (!groups.has(p.program_title)) groups.set(p.program_title, []);
+      groups.get(p.program_title).push(p);
+    } else {
+      standalone.push(p);
+    }
+  }
+
+  const latestOf = items => items.reduce((a, b) => (a.generated_at > b.generated_at ? a : b)).generated_at;
+  const entries = [
+    ...[...groups.entries()].map(([title, items]) => ({
+      html: renderPlanGroup(title, items),
+      sortKey: latestOf(items),
+    })),
+    ...standalone.map(p => ({ html: renderPlanCard(p), sortKey: p.generated_at })),
+  ].sort((a, b) => (a.sortKey < b.sortKey ? 1 : -1));
+
+  el.innerHTML = entries.map(e => e.html).join("");
+
+  el.querySelectorAll(".planDeleteBtn").forEach(btn => {
+    btn.onclick = (e) => {
+      e.preventDefault(); // don't toggle the <details> open state
+      deletePlan(btn.dataset.planId);
+    };
+  });
+}
+
+async function deletePlan(planId) {
+  try {
+    await fetch(`/session/plan/${planId}?session_id=${sessionId}`, { method: "DELETE" });
+  } catch (e) {}
+  loadPlan();
+}
+
+async function loadPlan() {
+  const el = document.getElementById("planView");
+  el.innerHTML = "<div id='planEmpty'>Chargement...</div>";
+  try {
+    const res = await fetch(`/session/plan?session_id=${sessionId}`);
+    if (!res.ok) throw new Error("bad response");
+    const data = await res.json();
+    renderPlan(data.plans);
+  } catch (e) {
+    el.innerHTML = "<div id='planEmpty'>❌ Impossible de charger le plan</div>";
+  }
+}
+
+// --- Plan proposals (inline in chat) ---
+const knownPlanIds = new Set();
+
+// Plan extraction (maybe_generate_plan) is a full extra LLM call that runs as a
+// background task after the chat reply has already streamed in, so it can easily
+// take several seconds longer than the reply itself — keep polling for a while
+// rather than giving up after one or two quick checks.
+const PLAN_POLL_INTERVAL_MS = 2000;
+const PLAN_POLL_MAX_ATTEMPTS = 20; // ~40s of coverage
+
+async function checkForNewPlans(attempt = 0) {
+  try {
+    const res = await fetch(`/session/plan?session_id=${sessionId}`);
+    if (res.ok) {
+      const data = await res.json();
+      const newPlans = (data.plans || []).filter(p => !knownPlanIds.has(p.id));
+      if (newPlans.length) {
+        newPlans.forEach(p => {
+          knownPlanIds.add(p.id);
+          addPlanProposal(p);
+        });
+        return;
+      }
+    }
+  } catch (e) {}
+  if (attempt < PLAN_POLL_MAX_ATTEMPTS) {
+    setTimeout(() => checkForNewPlans(attempt + 1), PLAN_POLL_INTERVAL_MS);
+  }
+}
+
+function addPlanProposal(plan) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "msg coach planProposal";
+  chatEl.appendChild(wrapper);
+  renderProposalView(wrapper, plan);
+  window.scrollTo(0, document.body.scrollHeight);
+}
+
+function renderProposalView(wrapper, plan) {
+  const summaryBits = [];
+  if (plan.session_total) summaryBits.push(`Séance ${plan.session_index || "?"}/${plan.session_total}`);
+  if (plan.total_duration_min) summaryBits.push(`${plan.total_duration_min} min`);
+  wrapper.innerHTML = `
+    <div class="proposalHeader">📋 Nouveau plan proposé — tu en penses quoi ?</div>
+    <div class="planCardTitle">
+      <div class="value">${plan.title}</div>
+      ${summaryBits.length ? `<div class="meta">${summaryBits.join(" · ")}</div>` : ""}
+    </div>
+    ${planSectionHtml("Échauffement", plan.warmup)}
+    ${planSectionHtml("Séance", plan.blocks)}
+    ${planSectionHtml("Retour au calme", plan.cooldown)}
+    <div class="proposalActions">
+      <button class="proposalBtn acceptBtn">✅ Accepter</button>
+      <button class="proposalBtn editBtn">✏️ Modifier</button>
+      <button class="proposalBtn rejectBtn">✕ Refuser</button>
+    </div>
+  `;
+  wrapper.querySelector(".acceptBtn").onclick = () => {
+    wrapper.innerHTML = `<div class="proposalHeader">✅ Plan « ${plan.title} » ajouté à ton programme — tu le retrouves dans l'onglet Plan.</div>`;
+  };
+  wrapper.querySelector(".editBtn").onclick = () => showPlanEditForm(wrapper, plan);
+  wrapper.querySelector(".rejectBtn").onclick = () => rejectPlanProposal(wrapper, plan);
+}
+
+async function rejectPlanProposal(wrapper, plan) {
+  wrapper.innerHTML = `<div class="proposalHeader">Suppression...</div>`;
+  try {
+    await fetch(`/session/plan/${plan.id}?session_id=${sessionId}`, { method: "DELETE" });
+  } catch (e) {}
+  wrapper.innerHTML = `<div class="proposalHeader">✕ Plan « ${plan.title} » refusé.</div>`;
+}
+
+function editableItemHtml(item) {
+  const it = item || {};
+  return `<div class="editItem">
+    <input class="editName" value="${(it.name || "").replace(/"/g, "&quot;")}" placeholder="Nom de l'exercice" />
+    <div class="editRow">
+      <input class="editSets" type="number" value="${it.sets ?? ""}" placeholder="Séries" />
+      <input class="editReps" value="${(it.reps || "").replace(/"/g, "&quot;")}" placeholder="Reps" />
+      <input class="editDuration" type="number" value="${it.duration_min ?? ""}" placeholder="Min" />
+      <input class="editRest" type="number" value="${it.rest_sec ?? ""}" placeholder="Repos (s)" />
+    </div>
+    <input class="editNotes" value="${(it.notes || "").replace(/"/g, "&quot;")}" placeholder="Notes" />
+    <button class="removeItemBtn" type="button">🗑 Retirer</button>
+  </div>`;
+}
+
+function editSectionHtml(section, title, items) {
+  return `<div class="planBlock editSection" data-section="${section}">
+    <div class="blockTitle">${title}</div>
+    <div class="editItems">${(items || []).map(editableItemHtml).join("")}</div>
+    <button class="addItemBtn" type="button" data-section="${section}">+ Ajouter un exercice</button>
+  </div>`;
+}
+
+function wireEditItemRemoval(root) {
+  root.querySelectorAll(".removeItemBtn").forEach(btn => {
+    btn.onclick = () => btn.closest(".editItem").remove();
+  });
+}
+
+function showPlanEditForm(wrapper, plan) {
+  wrapper.innerHTML = `
+    <div class="proposalHeader">✏️ Modifie le plan avant de l'accepter</div>
+    <input class="editTitle" value="${plan.title.replace(/"/g, "&quot;")}" placeholder="Titre de la séance" />
+    ${editSectionHtml("warmup", "Échauffement", plan.warmup)}
+    ${editSectionHtml("blocks", "Séance", plan.blocks)}
+    ${editSectionHtml("cooldown", "Retour au calme", plan.cooldown)}
+    <div class="proposalActions">
+      <button class="proposalBtn saveBtn">💾 Enregistrer et accepter</button>
+      <button class="proposalBtn cancelBtn">Annuler</button>
+    </div>
+  `;
+  wireEditItemRemoval(wrapper);
+  wrapper.querySelectorAll(".addItemBtn").forEach(btn => {
+    btn.onclick = () => {
+      const section = btn.dataset.section;
+      const container = wrapper.querySelector(`.editSection[data-section="${section}"] .editItems`);
+      const div = document.createElement("div");
+      div.innerHTML = editableItemHtml({});
+      container.appendChild(div.firstElementChild);
+      wireEditItemRemoval(container);
+    };
+  });
+  wrapper.querySelector(".cancelBtn").onclick = () => renderProposalView(wrapper, plan);
+  wrapper.querySelector(".saveBtn").onclick = () => savePlanEdits(wrapper, plan);
+}
+
+function collectEditSection(wrapper, section) {
+  const items = [];
+  wrapper.querySelectorAll(`.editSection[data-section="${section}"] .editItem`).forEach(itemEl => {
+    const name = itemEl.querySelector(".editName").value.trim();
+    if (!name) return;
+    const sets = itemEl.querySelector(".editSets").value;
+    const reps = itemEl.querySelector(".editReps").value.trim();
+    const duration = itemEl.querySelector(".editDuration").value;
+    const rest = itemEl.querySelector(".editRest").value;
+    const notes = itemEl.querySelector(".editNotes").value.trim();
+    items.push({
+      name,
+      sets: sets ? parseInt(sets, 10) : null,
+      reps: reps || null,
+      duration_min: duration ? parseInt(duration, 10) : null,
+      rest_sec: rest ? parseInt(rest, 10) : null,
+      notes,
+    });
+  });
+  return items;
+}
+
+async function savePlanEdits(wrapper, plan) {
+  const title = wrapper.querySelector(".editTitle").value.trim() || plan.title;
+  const body = {
+    title,
+    warmup: collectEditSection(wrapper, "warmup"),
+    blocks: collectEditSection(wrapper, "blocks"),
+    cooldown: collectEditSection(wrapper, "cooldown"),
+  };
+  wrapper.innerHTML = `<div class="proposalHeader">Enregistrement...</div>`;
+  try {
+    const res = await fetch(`/session/plan/${plan.id}?session_id=${sessionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error("bad response");
+    const data = await res.json();
+    wrapper.innerHTML = `<div class="proposalHeader">✅ Plan « ${data.plan.title} » modifié et ajouté à ton programme.</div>`;
+  } catch (e) {
+    wrapper.innerHTML = `<div class="proposalHeader">❌ Impossible d'enregistrer les modifications.</div>
+      <div class="proposalActions"><button class="proposalBtn retryBtn">Réessayer</button></div>`;
+    wrapper.querySelector(".retryBtn").onclick = () => showPlanEditForm(wrapper, plan);
+  }
+}
+
+// --- Profile tab ---
+let currentProfileRaw = null;
+let injuriesState = [];
+let availableGyms = [];
+let selectedGyms = [];
+let gymAddOpen = false;
+
+function joinList(arr) { return (arr || []).join(", "); }
+function gymLabel(slug) {
+  const name = slug.includes("/") ? slug.split("/").slice(1).join("/") : slug;
+  return name.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+function splitList(str) {
+  return (str || "").split(",").map(s => s.trim()).filter(Boolean);
+}
+function numOrNull(id) {
+  const v = document.getElementById(id).value;
+  return v === "" ? null : Number(v);
+}
+
+function injuryCardHtml(inj, idx) {
+  return `<div class="injuryCard" data-idx="${idx}">
+    <div class="injuryTop">
+      <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#aaa;">
+        <input type="checkbox" class="inj-active" ${inj.active ? "checked" : ""}/> Active
+      </label>
+      <button class="removeBtn inj-remove">✕</button>
+    </div>
+    <input type="text" class="inj-desc" placeholder="Description" value="${inj.description || ""}"/>
+    <input type="text" class="inj-avoid" placeholder="À éviter (séparé par des virgules)" value="${joinList(inj.avoid)}"/>
+  </div>`;
+}
+
+function renderInjuries() {
+  const el = document.getElementById("injuriesContainer");
+  el.innerHTML = injuriesState.map(injuryCardHtml).join("");
+  el.querySelectorAll(".inj-remove").forEach(btn => {
+    btn.onclick = () => {
+      const idx = parseInt(btn.closest(".injuryCard").dataset.idx);
+      injuriesState.splice(idx, 1);
+      renderInjuries();
+    };
+  });
+}
+
+function gymChipHtml(slug) {
+  return `<span class="gymChip">${gymLabel(slug)}<button type="button" class="gymRemoveBtn" data-gym="${slug}">×</button></span>`;
+}
+
+function renderGymAddRow() {
+  const el = document.getElementById("gymAddRow");
+  if (!el) return;
+  const remaining = availableGyms.filter(g => !selectedGyms.includes(g));
+  if (!gymAddOpen) {
+    el.innerHTML = remaining.length
+      ? `<button type="button" class="addBtn" id="gymAddBtn">+ Ajouter une salle</button>`
+      : (selectedGyms.length ? "" : `<div class="hint">Aucune salle trouvée en base.</div>`);
+    const btn = document.getElementById("gymAddBtn");
+    if (btn) btn.onclick = () => { gymAddOpen = true; renderGymAddRow(); };
+    return;
+  }
+  el.innerHTML = `
+    <select id="gymAddSelect">
+      <option value="">Choisir une salle…</option>
+      ${remaining.map(g => `<option value="${g}">${gymLabel(g)}</option>`).join("")}
+    </select>`;
+  const select = document.getElementById("gymAddSelect");
+  select.focus();
+  select.onchange = () => {
+    if (select.value) selectedGyms.push(select.value);
+    gymAddOpen = false;
+    renderGyms();
+  };
+  select.onblur = () => {
+    setTimeout(() => { if (gymAddOpen) { gymAddOpen = false; renderGymAddRow(); } }, 150);
+  };
+}
+
+function renderGyms() {
+  const el = document.getElementById("gymsContainer");
+  el.innerHTML = selectedGyms.length
+    ? `<div class="gymChips">${selectedGyms.map(gymChipHtml).join("")}</div>`
+    : `<div class="hint">Aucune salle sélectionnée.</div>`;
+  el.querySelectorAll(".gymRemoveBtn").forEach(btn => {
+    btn.onclick = () => {
+      selectedGyms = selectedGyms.filter(g => g !== btn.dataset.gym);
+      renderGyms();
+    };
+  });
+  renderGymAddRow();
+}
+
+function renderProfileForm(profile) {
+  const el = document.getElementById("profileView");
+  injuriesState = (profile.injuries || []).map(i => ({ ...i }));
+  selectedGyms = [...(profile.gyms || [])];
+  gymAddOpen = false;
+
+  el.innerHTML = `
+    <div class="formSection">
+      <div class="sectionTitle">Salles fréquentées</div>
+      <div id="gymsContainer"></div>
+      <div id="gymAddRow" style="margin-top:8px;"></div>
+    </div>
+    <div class="formSection">
+      <div class="sectionTitle">Physique</div>
+      <div class="formRow">
+        <label>Sexe</label>
+        <select id="pf_sex">
+          <option value="" ${!profile.sex ? "selected" : ""}>Non précisé</option>
+          <option value="homme" ${profile.sex === "homme" ? "selected" : ""}>Homme</option>
+          <option value="femme" ${profile.sex === "femme" ? "selected" : ""}>Femme</option>
+          <option value="autre" ${profile.sex === "autre" ? "selected" : ""}>Autre</option>
+        </select>
+      </div>
+      <div class="formGrid">
+        <div class="formRow"><label>Âge</label><input type="number" id="pf_age" value="${profile.age ?? ""}"/></div>
+        <div class="formRow"><label>Taille (cm)</label><input type="number" id="pf_height_cm" value="${profile.height_cm ?? ""}"/></div>
+        <div class="formRow"><label>Envergure (cm)</label><input type="number" id="pf_wingspan_cm" value="${profile.wingspan_cm ?? ""}"/></div>
+        <div class="formRow"><label>Poids (kg)</label><input type="number" step="0.1" id="pf_weight_kg" value="${profile.weight_kg ?? ""}"/></div>
+      </div>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Niveau</div>
+      <div class="formRow"><label>Années de grimpe</label><input type="number" step="0.5" id="pf_years_climbing" value="${profile.years_climbing ?? ""}"/></div>
+      <div class="formRow"><label>Grade de départ</label><input type="text" id="pf_started_at_level" value="${profile.started_at_level ?? ""}"/></div>
+      <div class="formGrid">
+        <div class="formRow"><label>Redpoint (cotation FR)</label><input type="text" id="pf_current_redpoint_grade_fr" value="${profile.current_redpoint_grade_fr ?? ""}"/></div>
+        <div class="formRow"><label>Flash (cotation FR)</label><input type="text" id="pf_current_flash_grade_fr" value="${profile.current_flash_grade_fr ?? ""}"/></div>
+      </div>
+      <div class="formGrid">
+        <div class="formRow">
+          <label>Redpoint (niveau Arkose)</label>
+          <input type="text" value="${profile.current_redpoint_level_arkose ?? ""}" disabled/>
+          <div class="hint">Mis à jour auto à la sync</div>
+        </div>
+        <div class="formRow">
+          <label>Flash (niveau Arkose)</label>
+          <input type="text" value="${profile.current_flash_level_arkose ?? ""}" disabled/>
+          <div class="hint">Mis à jour auto à la sync</div>
+        </div>
+      </div>
+      <div class="formRow"><label>Styles préférés</label><input type="text" id="pf_preferred_styles" value="${joinList(profile.preferred_styles)}"/><div class="hint">Séparés par des virgules</div></div>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Ressenti</div>
+      <div class="formRow"><label>Points forts</label><input type="text" id="pf_self_strengths" value="${joinList(profile.self_strengths)}"/><div class="hint">Séparés par des virgules</div></div>
+      <div class="formRow"><label>Points faibles</label><input type="text" id="pf_self_weaknesses" value="${joinList(profile.self_weaknesses)}"/><div class="hint">Séparés par des virgules</div></div>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Entraînement</div>
+      <div class="formGrid">
+        <div class="formRow"><label>Séances/semaine</label><input type="number" id="pf_gym_sessions_per_week" value="${profile.gym_sessions_per_week ?? ""}"/></div>
+        <div class="formRow"><label>Durée séance (min)</label><input type="number" id="pf_typical_session_duration_min" value="${profile.typical_session_duration_min ?? ""}"/></div>
+      </div>
+      <div class="formRow"><label>Autres activités</label><input type="text" id="pf_other_activities" value="${joinList(profile.other_activities)}"/><div class="hint">Séparées par des virgules</div></div>
+      <div class="formRow"><label>Setup maison</label><input type="text" id="pf_home_setup" value="${joinList(profile.home_setup)}"/><div class="hint">Séparé par des virgules (ex: poutre, campus board)</div></div>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Blessures</div>
+      <div id="injuriesContainer"></div>
+      <button class="addBtn" id="addInjuryBtn">+ Ajouter une blessure</button>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Objectifs</div>
+      <div class="formRow"><label>Court terme</label><input type="text" id="pf_short_term_goals" value="${joinList(profile.short_term_goals)}"/><div class="hint">Séparés par des virgules</div></div>
+      <div class="formRow"><label>Long terme</label><input type="text" id="pf_long_term_goals" value="${joinList(profile.long_term_goals)}"/><div class="hint">Séparés par des virgules</div></div>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Préférences coaching</div>
+      <div class="formGrid">
+        <div class="formRow"><label>Ton</label>
+          <select id="pf_coach_tone">
+            ${["direct", "encouraging", "analytical", "concise"].map(t =>
+              `<option value="${t}" ${profile.coach_tone === t ? "selected" : ""}>${t}</option>`).join("")}
+          </select>
+        </div>
+        <div class="formRow"><label>Focus</label>
+          <select id="pf_focus_preference">
+            ${["weaknesses", "strengths", "balanced", "ask_each_time"].map(t =>
+              `<option value="${t}" ${profile.focus_preference === t ? "selected" : ""}>${t}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+      <div class="formRow"><label>Langue</label>
+        <select id="pf_coach_language">
+          <option value="fr" ${profile.coach_language === "fr" ? "selected" : ""}>Français</option>
+          <option value="en" ${profile.coach_language === "en" ? "selected" : ""}>English</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="formSection">
+      <div class="sectionTitle">Notes libres</div>
+      <div class="formRow"><textarea id="pf_notes">${profile.notes ?? ""}</textarea></div>
+    </div>
+
+    <div id="profileSaveBar">
+      <button id="profileSaveBtn">Enregistrer le profil</button>
+      <div id="profileSaveStatus"></div>
+    </div>
+  `;
+  renderGyms();
+  renderInjuries();
+  document.getElementById("addInjuryBtn").onclick = () => {
+    injuriesState.push({ description: "", active: true, avoid: [] });
+    renderInjuries();
+  };
+  document.getElementById("profileSaveBtn").onclick = saveProfile;
+}
+
+function collectProfileFromForm() {
+  const injuries = injuriesState.map((_, idx) => {
+    const card = document.querySelector(`.injuryCard[data-idx="${idx}"]`);
+    return {
+      description: card.querySelector(".inj-desc").value.trim(),
+      active: card.querySelector(".inj-active").checked,
+      avoid: splitList(card.querySelector(".inj-avoid").value),
+    };
+  }).filter(i => i.description);
+
+  return {
+    ...currentProfileRaw,
+    gyms: [...selectedGyms],
+    sex: document.getElementById("pf_sex").value || null,
+    age: numOrNull("pf_age"),
+    height_cm: numOrNull("pf_height_cm"),
+    wingspan_cm: numOrNull("pf_wingspan_cm"),
+    weight_kg: numOrNull("pf_weight_kg"),
+    years_climbing: numOrNull("pf_years_climbing"),
+    started_at_level: document.getElementById("pf_started_at_level").value.trim(),
+    current_redpoint_grade_fr: document.getElementById("pf_current_redpoint_grade_fr").value.trim(),
+    current_flash_grade_fr: document.getElementById("pf_current_flash_grade_fr").value.trim(),
+    preferred_styles: splitList(document.getElementById("pf_preferred_styles").value),
+    self_strengths: splitList(document.getElementById("pf_self_strengths").value),
+    self_weaknesses: splitList(document.getElementById("pf_self_weaknesses").value),
+    gym_sessions_per_week: numOrNull("pf_gym_sessions_per_week"),
+    typical_session_duration_min: numOrNull("pf_typical_session_duration_min"),
+    other_activities: splitList(document.getElementById("pf_other_activities").value),
+    home_setup: splitList(document.getElementById("pf_home_setup").value),
+    injuries: injuries,
+    short_term_goals: splitList(document.getElementById("pf_short_term_goals").value),
+    long_term_goals: splitList(document.getElementById("pf_long_term_goals").value),
+    coach_tone: document.getElementById("pf_coach_tone").value,
+    coach_language: document.getElementById("pf_coach_language").value,
+    focus_preference: document.getElementById("pf_focus_preference").value,
+    notes: document.getElementById("pf_notes").value,
+  };
+}
+
+async function saveProfile() {
+  const btn = document.getElementById("profileSaveBtn");
+  const status = document.getElementById("profileSaveStatus");
+  btn.disabled = true;
+  status.textContent = "Enregistrement...";
+  try {
+    const updated = collectProfileFromForm();
+    const res = await fetch("/session/profile", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, profile: updated })
+    });
+    if (!res.ok) throw new Error("bad response");
+    currentProfileRaw = updated;
+    status.textContent = "✅ Profil enregistré";
+  } catch (e) {
+    status.textContent = "❌ Erreur lors de l'enregistrement";
+  }
+  btn.disabled = false;
+  setTimeout(() => { status.textContent = ""; }, 2500);
+}
+
+async function loadProfile() {
+  const el = document.getElementById("profileView");
+  el.innerHTML = "<div id='profileEmpty'>Chargement...</div>";
+  try {
+    const [profileRes, gymsRes] = await Promise.all([
+      fetch(`/session/profile?session_id=${sessionId}`),
+      fetch(`/session/gyms?session_id=${sessionId}`),
+    ]);
+    if (!profileRes.ok) throw new Error("bad response");
+    const data = await profileRes.json();
+    availableGyms = gymsRes.ok ? (await gymsRes.json()).gyms : [];
+    currentProfileRaw = data;
+    renderProfileForm(data);
+  } catch (e) {
+    el.innerHTML = "<div id='profileEmpty'>❌ Impossible de charger le profil</div>";
+  }
+}
+
+function showTab(tab) {
+  const chatEl2 = document.getElementById("chat");
+  const statsEl = document.getElementById("statsView");
+  const planEl = document.getElementById("planView");
+  const profileEl = document.getElementById("profileView");
+  const inputBar = document.getElementById("inputBar");
+  document.getElementById("tabChat").classList.toggle("active", tab === "chat");
+  document.getElementById("tabStats").classList.toggle("active", tab === "stats");
+  document.getElementById("tabPlan").classList.toggle("active", tab === "plan");
+  document.getElementById("tabProfile").classList.toggle("active", tab === "profile");
+
+  chatEl2.style.display = tab === "chat" ? "block" : "none";
+  inputBar.style.display = tab === "chat" ? "flex" : "none";
+  statsEl.style.display = tab === "stats" ? "block" : "none";
+  planEl.style.display = tab === "plan" ? "block" : "none";
+  profileEl.style.display = tab === "profile" ? "block" : "none";
+
+  if (tab === "stats") loadStats();
+  if (tab === "plan") loadPlan();
+  if (tab === "profile") loadProfile();
+}
+
+document.getElementById("tabChat").onclick = () => showTab("chat");
+document.getElementById("tabStats").onclick = () => showTab("stats");
+document.getElementById("tabPlan").onclick = () => showTab("plan");
+document.getElementById("tabProfile").onclick = () => showTab("profile");
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js");
+}
+
+startSession();
+</script>
+</body>
+</html>

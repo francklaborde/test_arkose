@@ -77,6 +77,9 @@ class ClimberProfile:
     # Gym slugs to sync by default, e.g. ["arkose/montmartre", "arkose/nation"]
 
     # ---- Physical profile ------------------------------------------------
+    sex: Optional[str] = None
+    # "homme" | "femme" | "autre" — affects physiological baselines (strength,
+    # recovery) the coach should account for when giving training advice
     age: Optional[int] = None
     height_cm: Optional[int] = None
     # Already available in the sboulder users collection
@@ -86,12 +89,20 @@ class ClimberProfile:
 
     # ---- Climbing history ------------------------------------------------
     years_climbing: Optional[float] = None
-    started_at_grade: Optional[str] = None
-    # Grade (Fontainebleau) when they first started, e.g. "5b"
-    current_redpoint_grade: Optional[str] = None
-    # Max grade sent after multiple attempts
-    current_flash_grade: Optional[str] = None
-    # Max grade sent first try
+
+    # Niveau de départ (souvent approximatif) — texte libre en couleurs Arkose,
+    # ex: "rouge ou noir", ou précis si connu, ex: "vert 3 barres"
+    started_at_level: Optional[str] = None
+
+    # Cotation française (Fontainebleau), précise si connue
+    current_redpoint_grade_fr: Optional[str] = None   # ex: "6a+"
+    current_flash_grade_fr: Optional[str] = None      # ex: "6a"
+
+    # Niveau Arkose correspondant, précis (couleur + barres) — sert à comparer
+    # directement avec les voies proposées par StatsBuilder
+    current_redpoint_level_arkose: Optional[str] = None  # ex: "rouge 3 barres"
+    current_flash_level_arkose: Optional[str] = None     # ex: "rouge 2 barres"
+
     preferred_styles: list[str] = field(default_factory=list)
     # Free text, used verbatim in the prompt
     # e.g. ["powerful", "dynamic", "compression", "slab"]
@@ -153,14 +164,17 @@ class ClimberProfile:
             "sboulder_user_id": self.sboulder_user_id,
             "name": self.name,
             "gyms": self.gyms,
+            "sex": self.sex,
             "age": self.age,
             "height_cm": self.height_cm,
             "wingspan_cm": self.wingspan_cm,
             "weight_kg": self.weight_kg,
             "years_climbing": self.years_climbing,
-            "started_at_grade": self.started_at_grade,
-            "current_redpoint_grade": self.current_redpoint_grade,
-            "current_flash_grade": self.current_flash_grade,
+            "started_at_level": self.started_at_level,
+            "current_redpoint_grade_fr": self.current_redpoint_grade_fr,
+            "current_flash_grade_fr": self.current_flash_grade_fr,
+            "current_redpoint_level_arkose": self.current_redpoint_level_arkose,
+            "current_flash_level_arkose": self.current_flash_level_arkose,
             "preferred_styles": self.preferred_styles,
             "self_strengths": self.self_strengths,
             "self_weaknesses": self.self_weaknesses,
@@ -183,14 +197,17 @@ class ClimberProfile:
             sboulder_user_id=d.get("sboulder_user_id", ""),
             name=d.get("name", ""),
             gyms=d.get("gyms", []),
+            sex=d.get("sex"),
             age=d.get("age"),
             height_cm=d.get("height_cm"),
             wingspan_cm=d.get("wingspan_cm"),
             weight_kg=d.get("weight_kg"),
             years_climbing=d.get("years_climbing"),
-            started_at_grade=d.get("started_at_grade"),
-            current_redpoint_grade=d.get("current_redpoint_grade"),
-            current_flash_grade=d.get("current_flash_grade"),
+            started_at_level=d.get("started_at_level"),
+            current_redpoint_grade_fr=d.get("current_redpoint_grade_fr"),
+            current_flash_grade_fr=d.get("current_flash_grade_fr"),
+            current_redpoint_level_arkose=d.get("current_redpoint_level_arkose"),
+            current_flash_level_arkose=d.get("current_flash_level_arkose"),
             preferred_styles=d.get("preferred_styles", []),
             self_strengths=d.get("self_strengths", []),
             self_weaknesses=d.get("self_weaknesses", []),
@@ -208,12 +225,81 @@ class ClimberProfile:
         )
 
     # ------------------------------------------------------------------
+    # Partial updates (used by the automatic profile-update mechanism)
+    # ------------------------------------------------------------------
+
+    # Scalar fields: overwritten when a new value is provided.
+    _UPDATABLE_SCALAR_FIELDS = [
+        "sex", "age", "height_cm", "wingspan_cm", "weight_kg", "years_climbing",
+        "gym_sessions_per_week", "typical_session_duration_min",
+        "coach_tone", "coach_language", "focus_preference", "notes",
+    ]
+
+    # List fields: new items are appended (deduplicated, case-insensitive),
+    # existing items are never removed by this mechanism.
+    _UPDATABLE_LIST_FIELDS = {
+        "add_gyms": "gyms",
+        "add_preferred_styles": "preferred_styles",
+        "add_self_strengths": "self_strengths",
+        "add_self_weaknesses": "self_weaknesses",
+        "add_other_activities": "other_activities",
+        "add_home_setup": "home_setup",
+        "add_short_term_goals": "short_term_goals",
+        "add_long_term_goals": "long_term_goals",
+    }
+
+    def apply_updates(self, updates: dict) -> list[str]:
+        """
+        Merge a partial `updates` dict (as produced by the LLM profile-update
+        extraction) into this profile. Scalar fields are overwritten; add_*
+        list fields are appended without duplicates; injuries can be added
+        (add_injuries) or marked healed (resolve_injuries, matched by
+        description substring). Existing data is never silently erased.
+        Returns the list of field names that actually changed.
+        """
+        changed: list[str] = []
+
+        for field_name in self._UPDATABLE_SCALAR_FIELDS:
+            if field_name in updates and updates[field_name] not in (None, ""):
+                if getattr(self, field_name) != updates[field_name]:
+                    setattr(self, field_name, updates[field_name])
+                    changed.append(field_name)
+
+        for update_key, field_name in self._UPDATABLE_LIST_FIELDS.items():
+            new_items = updates.get(update_key) or []
+            current = getattr(self, field_name)
+            existing_lower = {item.lower() for item in current}
+            for item in new_items:
+                if item and item.lower() not in existing_lower:
+                    current.append(item)
+                    existing_lower.add(item.lower())
+                    changed.append(field_name)
+
+        for inj_data in updates.get("add_injuries") or []:
+            desc = (inj_data.get("description") or "").strip()
+            if not desc:
+                continue
+            if any(desc.lower() in i.description.lower() for i in self.injuries):
+                continue
+            self.injuries.append(Injury.from_dict(inj_data))
+            changed.append("injuries")
+
+        for resolved_desc in updates.get("resolve_injuries") or []:
+            resolved_lower = resolved_desc.lower()
+            for inj in self.injuries:
+                if inj.active and resolved_lower in inj.description.lower():
+                    inj.active = False
+                    changed.append("injuries")
+
+        return changed
+
+    # ------------------------------------------------------------------
     # File I/O
     # ------------------------------------------------------------------
 
     def save(self, path: str | Path = "climber_profile.json") -> None:
         path = Path(path)
-        path.write_text(json.dumps(self.to_dict(), indent=2, ensure_ascii=False))
+        path.write_text(json.dumps(self.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
         log.info("Profile saved → %s", path.resolve())
 
     @classmethod
@@ -224,7 +310,7 @@ class ClimberProfile:
                 f"Profile not found at {path}.\n"
                 "Run ClimberProfile().save('<path>') to create a blank template."
             )
-        profile = cls.from_dict(json.loads(path.read_text()))
+        profile = cls.from_dict(json.loads(path.read_text(encoding="utf-8")))
         log.info("Profile loaded ← %s", path.resolve())
         return profile
 
@@ -262,6 +348,8 @@ class ClimberProfile:
 
         # Physical
         phys_parts = []
+        if self.sex:
+            phys_parts.append(self.sex)
         if self.age:
             phys_parts.append(f"{self.age} ans")
         if self.height_cm:
@@ -275,12 +363,16 @@ class ClimberProfile:
 
         # Climbing level
         _add("Années de grimpe", self.years_climbing)
-        _add("Grade de départ", self.started_at_grade)
+        _add("Grade de départ", self.started_at_level)
         level_parts = []
-        if self.current_redpoint_grade:
-            level_parts.append(f"redpoint {self.current_redpoint_grade}")
-        if self.current_flash_grade:
-            level_parts.append(f"flash {self.current_flash_grade}")
+        if self.current_redpoint_grade_fr:
+            level_parts.append(f"redpoint cotation fr {self.current_redpoint_grade_fr}")
+        if self.current_redpoint_level_arkose:
+                    level_parts.append(f"redpoint level arkose {self.current_redpoint_level_arkose}")
+        if self.current_flash_grade_fr:
+            level_parts.append(f"flash {self.current_flash_grade_fr}")
+        if self.current_flash_level_arkose:
+            level_parts.append(f"flash {self.current_flash_level_arkose}")
         _add("Niveau actuel", ", ".join(level_parts) if level_parts else None)
         _add("Styles préférés", ", ".join(self.preferred_styles) if self.preferred_styles else None)
 

@@ -32,16 +32,17 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Optional
 
 from openai import OpenAI
 
-from climber_profile import ClimberProfile, Injury
-from sboulder_collector import SBoulderCollector, ROUTE_TYPES_BY_ID, ROUTE_TYPE_LEAF_IDS, decode_grade
+from .climber_profile import ClimberProfile, Injury
+from .sboulder_collector import SBoulderCollector, ROUTE_TYPES_BY_ID, ROUTE_TYPE_LEAF_IDS, decode_grade, sboulder_url, encode_grade_level
 
 log = logging.getLogger("climbing_coach")
 log.addHandler(logging.NullHandler())
@@ -99,7 +100,7 @@ class RecentAscent:
         kind = "flashé" if self.ascent_type == "flash" else "envoyé"
         label = decode_grade(self.holds_color, self.grade) if self.holds_color else (self.grade or "?")
         types = f" [{', '.join(self.route_type_labels)}]" if self.route_type_labels else ""
-        rarity = f" — {self.sents_count} envois salle" if self.sents_count else ""
+        rarity = f"réussie par {self.sents_count} grimpeur(s) en salle" if self.sents_count else "aucun envoi salle enregistré"
         return f"{label} {kind}{types}{rarity} ({self.detected_at[:10]})"
 
 
@@ -137,6 +138,29 @@ class ClimbingStats:
     # list of (boulder_id, grade, sents_count, comment_texts)
     commented_projects: list[dict] = field(default_factory=list)
 
+    # Individual open, unsent boulders with full detail (for direct recommendations)
+    unsent_boulders: list[dict] = field(default_factory=list)
+
+    current_level: Optional[str] = None
+    current_flash_level: Optional[str] = None
+
+    # Timestamp (ISO) of the single most recent ascent across all gyms —
+    # used to surface how long it's been since the climber last climbed.
+    last_ascent_at: Optional[str] = None
+
+    @property
+    def days_since_last_ascent(self) -> Optional[int]:
+        """Whole days elapsed since the last recorded ascent, or None if unknown."""
+        if not self.last_ascent_at:
+            return None
+        try:
+            last = datetime.fromisoformat(self.last_ascent_at)
+        except ValueError:
+            return None
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - last).days
+
     @property
     def weakest_route_types(self) -> list[RouteTypeStat]:
         """Leaf types with at least 3 total boulders, sorted by send rate asc."""
@@ -161,6 +185,17 @@ class ClimbingStats:
         # Volume
         lines.append(f"- **Total envois** : {self.total_sends} blocs "
                      f"({self.total_flashes} flashés)")
+
+        # Time since the last ascent — important signal for how the coach
+        # should open the conversation (long break vs. active streak).
+        days = self.days_since_last_ascent
+        if days is not None:
+            if days == 0:
+                lines.append("- **Dernière séance** : aujourd'hui")
+            elif days == 1:
+                lines.append("- **Dernière séance** : hier")
+            else:
+                lines.append(f"- **Dernière séance** : il y a {days} jours")
 
         # Grade distribution
         if self.sends_by_grade:
@@ -189,29 +224,39 @@ class ClimbingStats:
             for s in strong:
                 lines.append(f"  - {s}")
 
-        # Unsent boulders still open
-        if self.unsent_by_grade:
-            unsent_str = ", ".join(
-                f"{g}: {c}" for g, c in sorted(self.unsent_by_grade.items())
-            )
-            lines.append(f"- **Blocs ouverts non envoyés** : {unsent_str}")
+        # # Unsent boulders still open
+        # if self.unsent_by_grade:
+        #     unsent_str = ", ".join(
+        #         f"{g}: {c}" for g, c in sorted(self.unsent_by_grade.items())
+        #     )
+        #     lines.append(f"- **Blocs ouverts non envoyés** : {unsent_str}")
 
+        # Individual unsent boulders with links (candidate list for recommendations)
+        if self.unsent_boulders:
+            lines.append("- **Voies ouvertes non envoyées (détail)** :")
+            for b in self.unsent_boulders[:25]:
+                types = f" [{', '.join(b['route_types'])}]" if b['route_types'] else ""
+                rarity = f"réussie par {b['sents_count']} grimpeur(s) en salle" if b['sents_count'] else "aucun envoi salle enregistré"
+                lines.append(f"  - {b['grade']}{types} — {b['url']} ({rarity})")
+                # for c in b["comments"][:1]:  # 1 seul commentaire ici, info secondaire
+                #     lines.append(f'    > commentaire communauté (info, pas un critère) : "{c}"')
+    
         # Recent ascents with community context
         if self.recent_ascents:
             lines.append("- **Derniers envois** :")
             for a in self.recent_ascents[:max_recent]:
                 lines.append(f"  - {a}")
                 for comment in a.comments[:2]:  # max 2 comments per ascent
-                    lines.append(f'    > "{comment}"')
+                    lines.append(f'    > commentaire communauté : "{comment}"')
 
-        # Commented projects (unsent boulders with community feedback)
-        if self.commented_projects:
-            lines.append("- **Projets avec commentaires communautaires** :")
-            for p in self.commented_projects[:5]:
-                rarity = f"{p['sents_count']} envois salle"
-                lines.append(f"  - {p['grade'] or '?'} ({rarity}) :")
-                for c in p["comments"][:2]:
-                    lines.append(f'    > "{c}"')
+        # # Commented projects (unsent boulders with community feedback)
+        # if self.commented_projects:
+        #     lines.append("- **Projets avec commentaires communautaires** :")
+        #     for p in self.commented_projects[:5]:
+        #         rarity = f"{p['sents_count']} envois salle"
+        #         lines.append(f"  - {p['grade'] or '?'} ({rarity}) :")
+        #         for c in p["comments"][:2]:
+        #             lines.append(f'    > commentaire communauté : "{c}"')
 
         # Last sync
         if self.last_sync:
@@ -244,6 +289,7 @@ class StatsBuilder:
         user_id: str,
         gyms: Optional[list[str]] = None,
         recent_n: int = 10,
+        min_level: Optional[tuple[int, int]] = None,
     ) -> ClimbingStats:
         """
         Build a full ClimbingStats for user_id.
@@ -271,9 +317,15 @@ class StatsBuilder:
 
         # Recent ascents
         stats.recent_ascents = self._recent_ascents(user_id, recent_n)
+        # _recent_ascents is ordered DESC, so index 0 is the single most
+        # recent ascent regardless of the recent_n truncation.
+        stats.last_ascent_at = stats.recent_ascents[0].detected_at if stats.recent_ascents else None
 
         # Unsent open boulders
         stats.unsent_by_grade = self._unsent_by_grade(sent_ids, gyms)
+
+        # Unsent open boulders (individual, with url — new candidate for recommendations)
+        stats.unsent_boulders = self._unsent_boulders(sent_ids, gyms, min_level=min_level)
 
         # Commented projects — unsent boulders that have community text comments
         stats.commented_projects = self._commented_projects(sent_ids, gyms)
@@ -286,6 +338,9 @@ class StatsBuilder:
                 ascent.flashes_count = row["flashes_count"] or 0
                 ascent.holds_color   = row["holds_color"]
             ascent.comments = self._boulder_comments(ascent.boulder_id)
+
+        stats.current_level       = self._current_level_arkose(user_id, "send")
+        stats.current_flash_level = self._current_level_arkose(user_id, "flash")
 
         # Last sync per gym
         stats.last_sync = {gym: self._last_sync(gym) for gym in gyms}
@@ -484,6 +539,82 @@ class StatsBuilder:
             })
         return result
 
+    def _unsent_boulders(
+        self, sent_ids: set[str], gyms: list[str],
+        min_level: Optional[tuple[int, int]] = None,
+        limit: int = 25
+    ) -> list[dict]:
+        gym_placeholders = ",".join("?" * len(gyms))
+        rows = self._conn.execute(
+            f"""SELECT b.boulder_id, b.gym, b.holds_color, b.grade,
+                       b.route_types, b.sents_count, b.flashes_count
+               FROM boulders b
+               WHERE b.gym IN ({gym_placeholders})
+                 AND (closed_at IS NULL OR closed_at > ?)
+                 AND b.grade IS NOT NULL AND b.holds_color IS NOT NULL
+               ORDER BY b.sents_count DESC""",
+            (*gyms, _now_iso()),
+        ).fetchall()
+
+        result = []
+        for r in rows:
+            if r["boulder_id"] in sent_ids:
+                continue
+            if min_level:
+                color, grade = r["holds_color"], int(r["grade"])
+                if (color, grade) < min_level:
+                    continue
+
+            try:
+                type_ids: list[int] = json.loads(r["route_types"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                type_ids = []
+            labels = [
+                ROUTE_TYPES_BY_ID[t].label_fr
+                for t in type_ids
+                if t in ROUTE_TYPES_BY_ID and not ROUTE_TYPES_BY_ID[t].is_category
+            ]
+
+            result.append({
+                "boulder_id":    r["boulder_id"],
+                "grade":         decode_grade(r["holds_color"], r["grade"]),
+                "url":           sboulder_url(r["gym"], r["boulder_id"]),
+                "route_types":   labels,
+                "sents_count":   r["sents_count"] or 0,
+                "flashes_count": r["flashes_count"] or 0,
+            })
+            if len(result) >= limit:
+                break
+        return result
+
+    def _current_level_arkose(
+        self, user_id: str, ascent_type: str, top_n: int = 5, months: int = 12
+    ) -> Optional[str]:
+        """
+        Among the top_n hardest boulders of ascent_type ('send' or 'flash')
+        completed in the last `months` months, return the easiest one (decoded).
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=30 * months)).isoformat()
+        rows = self._conn.execute(
+            """SELECT b.holds_color, b.grade
+               FROM ascents a
+               JOIN boulders b ON a.boulder_id = b.boulder_id
+               WHERE a.user_id = ? AND a.ascent_type = ? AND a.detected_at >= ?
+                 AND b.grade IS NOT NULL AND b.holds_color IS NOT NULL""",
+            (user_id, ascent_type, cutoff),
+        ).fetchall()
+
+        if not rows:
+            return None
+
+        graded = sorted(
+            [(r["holds_color"], int(r["grade"])) for r in rows],
+            reverse=True,
+        )
+        top = graded[:top_n]
+        easiest_color, easiest_grade = top[-1]
+        return decode_grade(easiest_color, str(easiest_grade))
+    
     def _last_sync(self, gym: str) -> Optional[str]:
         row = self._conn.execute(
             "SELECT synced_at FROM sync_log WHERE gym=? ORDER BY id DESC LIMIT 1",
@@ -493,6 +624,80 @@ class StatsBuilder:
 
     def close(self):
         self._conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Session plan (warm-up / exercises / rest, generated from the conversation)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PlanBlock:
+    """A single item within a session plan (warmup exercise, main block, cooldown)."""
+    name: str
+    sets: Optional[int] = None
+    reps: Optional[str] = None          # free text, e.g. "8-10" or "max"
+    duration_min: Optional[int] = None
+    rest_sec: Optional[int] = None
+    notes: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "sets": self.sets,
+            "reps": self.reps,
+            "duration_min": self.duration_min,
+            "rest_sec": self.rest_sec,
+            "notes": self.notes,
+        }
+
+
+@dataclass
+class SessionPlan:
+    """A structured training session plan, extracted on demand from the conversation."""
+    title: str
+    warmup: list[PlanBlock] = field(default_factory=list)
+    blocks: list[PlanBlock] = field(default_factory=list)
+    cooldown: list[PlanBlock] = field(default_factory=list)
+    total_duration_min: Optional[int] = None
+    equipment_used: list[str] = field(default_factory=list)
+    # Set when this plan is one session of a multi-session program
+    # (e.g. a 3-session build-up toward a specific project).
+    program_title: Optional[str] = None
+    session_index: Optional[int] = None
+    session_total: Optional[int] = None
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    generated_at: str = field(default_factory=_now_iso)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "program_title": self.program_title,
+            "session_index": self.session_index,
+            "session_total": self.session_total,
+            "warmup": [b.to_dict() for b in self.warmup],
+            "blocks": [b.to_dict() for b in self.blocks],
+            "cooldown": [b.to_dict() for b in self.cooldown],
+            "total_duration_min": self.total_duration_min,
+            "equipment_used": self.equipment_used,
+            "generated_at": self.generated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SessionPlan":
+        def _blocks(key: str) -> list[PlanBlock]:
+            return [PlanBlock(**b) for b in (data.get(key) or [])]
+        return cls(
+            title=data.get("title") or "Séance",
+            program_title=data.get("program_title") or None,
+            session_index=data.get("session_index"),
+            session_total=data.get("session_total"),
+            warmup=_blocks("warmup"),
+            blocks=_blocks("blocks"),
+            cooldown=_blocks("cooldown"),
+            total_duration_min=data.get("total_duration_min"),
+            equipment_used=data.get("equipment_used") or [],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -516,14 +721,15 @@ Ton objectif est de collecter suffisamment d'informations pour construire \
 son profil de coaching personnalisé.
 
 Tu dois couvrir progressivement ces thèmes, dans un ordre naturel :
-1. Profil physique (âge, taille, envergure, poids) — demande-les ensemble de façon légère
-2. Historique de grimpe (depuis combien de temps, comment il a commencé)
-3. Niveau actuel (grade redpoint, grade flash)
-4. Styles préférés et points forts ressentis
-5. Points faibles ressentis ou identifiés
-6. Entraînement actuel (séances/semaine, durée, setup maison, autres activités)
-7. Blessures actuelles ou passées importantes
-8. Objectifs court terme et long terme
+1. Salle(s) Arkose fréquentée(s) (laquelle/lesquelles, celle où il grimpe le plus souvent)
+2. Profil physique (sexe, âge, taille, envergure, poids) — demande-les ensemble de façon légère
+3. Historique de grimpe (depuis combien de temps, comment il a commencé)
+4. Niveau actuel (grade redpoint, grade flash)
+5. Styles préférés et points forts ressentis
+6. Points faibles ressentis ou identifiés
+7. Entraînement actuel (séances/semaine, durée, setup maison, autres activités)
+8. Blessures actuelles ou passées importantes
+9. Objectifs court terme et long terme
 
 Règles importantes :
 - Pose UNE seule question à la fois, ou un groupe logique de 2-3 questions courtes
@@ -562,8 +768,9 @@ commence toujours par les mentionner naturellement avant d'aller plus loin.
 les axes de progression prioritaires
 - Tiens compte du nombre d'envois salle sur chaque bloc : un bloc envoyé par peu de grimpeurs \
 est un vrai exploit, dis-le
-- Les commentaires de la communauté sur les projets sont de l'or : \
-utilise-les pour donner des conseils concrets sur la méthode
+- Les commentaires affichés viennent TOUJOURS de la communauté, jamais du grimpeur \
+lui-même. Ne jamais dire "tu soulignais" ou "comme tu l'as dit" à propos d'un commentaire — \
+dis plutôt "un grimpeur a noté que..." ou "la communauté mentionne...".
 
 ## Message d'accueil
 Quand le grimpeur arrive en session, commence par un recap court mais précis de sa situation \
@@ -577,12 +784,19 @@ pas "quelques 5 et quelques 3")
 "tendu", "gainage"), pas "tes points forts" de façon générique
 - Si un envoi est rare ou notable (peu de grimpeurs l'ont envoyé, flash sur un bloc dur), \
 dis-le avec le chiffre exact si disponible
+- Si les statistiques indiquent que la dernière séance remonte à plusieurs semaines, \
+mentionne-le avec bienveillance et sans culpabilisation (ex: reprise en douceur), \
+jamais sur un ton de reproche. À l'inverse, une reprise rapprochée mérite d'être valorisée.
 Interdiction stricte d'inventer ou d'arrondir des chiffres non présents dans les stats : \
 si une donnée précise manque, formule la phrase sans elle plutôt que d'être approximatif.
 Termine en évoquant, sans les détailler, qu'il y a des pistes de travail possibles pour la suite \
 (une phrase suffit, du type "on pourrait creuser deux ou trois pistes aujourd'hui"). \
 Ne développe jamais ces pistes toi-même à ce stade — laisse le grimpeur choisir la direction \
 qu'il veut prendre.
+Évite les formulations "soit... soit..." ou les listes à choix multiples déguisées en phrase. \
+Parle comme un humain qui a vraiment regardé les stats, pas comme un menu. Une seule piste \
+suggérée avec conviction vaut mieux que deux options neutres jetées côte à côte. \
+Pas plus d'un emoji dans tout le message, et seulement s'il apporte vraiment quelque chose.
 """
 
     # ------------------------------------------------------------------
@@ -600,14 +814,18 @@ Retourne UNIQUEMENT un objet JSON valide avec les champs suivants \
 
 {
   "name": string,
+  "gyms": [string],
+  "sex": "homme" | "femme" | "autre",
   "age": int,
   "height_cm": int,
   "wingspan_cm": int,
   "weight_kg": float,
   "years_climbing": float,
-  "started_at_grade": string,
-  "current_redpoint_grade": string,
-  "current_flash_grade": string,
+  "started_at_level": string,
+  "current_redpoint_grade_fr": string,
+  "current_flash_grade_fr": string,
+  "current_redpoint_level_arkose": string,
+  "current_flash_level_arkose": string,
   "preferred_styles": [string],
   "self_strengths": [string],
   "self_weaknesses": [string],
@@ -624,6 +842,67 @@ Retourne UNIQUEMENT un objet JSON valide avec les champs suivants \
   "coach_language": "fr",
   "focus_preference": string
 }
+
+Format du champ "gyms" : une liste de slugs "arkose/<nom-de-salle>", nom de \
+salle en minuscules avec des tirets à la place des espaces/apostrophes \
+(ex: "Nation" -> "arkose/nation", "Strasbourg St-Denis" -> \
+"arkose/strasbourg-st-denis"). Inclus toutes les salles mentionnées par le \
+grimpeur, pas seulement la principale.
+"""
+
+    # ------------------------------------------------------------------
+    # Session plan extraction (used internally after each coaching turn)
+    # ------------------------------------------------------------------
+
+    PLAN_PROMPT = """Tu es un extracteur qui transforme une conversation de coaching \
+escalade en un ou plusieurs plans de séance structurés.
+
+Un "plan" peut être :
+- une séance ponctuelle (échauffement / bloc principal / retour au calme)
+- une séance faisant partie d'un programme à plusieurs séances (ex: préparer \
+un projet précis sur 3 séances) — dans ce cas renseigne "program_title" \
+(même titre de programme pour toutes les séances qui le composent), \
+"session_index" et "session_total"
+- une routine complémentaire à faire en parallèle de l'escalade (ex: tractions, \
+gainage à la maison) — dans ce cas laisse "program_title" à null
+
+La liste des plans déjà enregistrés pour ce grimpeur est fournie dans le \
+contexte ci-dessous. Ne les ré-extrait JAMAIS. N'extrait que les plans NOUVEAUX \
+qui apparaissent dans la conversation ci-dessous et qui ne sont pas déjà dans \
+cette liste.
+
+Si aucun plan nouveau n'apparaît, retourne exactement : {"plans": []}
+
+Sinon, retourne UNIQUEMENT un objet JSON valide, sans texte avant/après, sans \
+balises markdown, au format :
+
+{
+  "plans": [
+    {
+      "title": string,
+      "program_title": string ou null,
+      "session_index": int ou null,
+      "session_total": int ou null,
+      "warmup": [ { "name": string, "duration_min": int, "notes": string } ],
+      "blocks": [ { "name": string, "sets": int, "reps": string, "duration_min": int, \
+"rest_sec": int, "notes": string } ],
+      "cooldown": [ { "name": string, "duration_min": int, "notes": string } ],
+      "total_duration_min": int,
+      "equipment_used": [string]
+    }
+  ]
+}
+
+Règles :
+- Si la conversation décrit un programme sur plusieurs séances en une fois, \
+extrait TOUTES les séances du programme d'un coup (un objet par séance dans "plans").
+- Adapte les exercices au matériel réellement disponible (donné dans le contexte \
+ci-dessous). Sans accès salle : uniquement préparation physique, mobilité, \
+doigts (si poutre disponible), gainage, etc. — jamais de bloc ni de voie.
+- Respecte strictement les blessures actives listées dans le profil.
+- N'invente pas de contraintes non mentionnées.
+- Chaque champ numérique manquant doit être omis plutôt qu'inventé au hasard.
+- "reps" est une chaîne libre (ex: "8-10", "max", "3x échec").
 """
 
     # ------------------------------------------------------------------
@@ -650,6 +929,21 @@ Retourne UNIQUEMENT un objet JSON valide avec les champs suivants \
 
     def extraction_system(self) -> str:
         return self.EXTRACTION_PROMPT
+
+    def plan_system(
+        self,
+        profile: Optional[ClimberProfile] = None,
+        known_plans: Optional[list[str]] = None,
+    ) -> str:
+        parts = [self.PLAN_PROMPT]
+        if profile:
+            parts.append(profile.to_llm_context())
+        if known_plans:
+            listing = "\n".join(f"- {t}" for t in known_plans)
+        else:
+            listing = "Aucun pour l'instant."
+        parts.append(f"## Plans déjà enregistrés (ne pas les ré-extraire)\n{listing}")
+        return "\n\n".join(parts)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -735,6 +1029,35 @@ class LLMClient:
         self._history.append({"role": "assistant", "content": reply})
         return reply
 
+    def chat_stream(self, user_message: str):
+        """
+        Send a user message, yield the assistant reply incrementally as it is
+        generated, and update history once the stream completes.
+        """
+        self._history.append({"role": "user", "content": user_message})
+
+        messages = []
+        if self._system:
+            messages.append({"role": "system", "content": self._system})
+        messages.extend(self._history)
+
+        stream = self._client.chat.completions.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            messages=messages,
+            stream=True,
+        )
+
+        chunks: list[str] = []
+        for event in stream:
+            delta = event.choices[0].delta.content
+            if delta:
+                chunks.append(delta)
+                yield delta
+
+        self._history.append({"role": "assistant", "content": "".join(chunks)})
+
     def call_once(self, system: str, user_message: str) -> str:
         """
         Single stateless call — does NOT affect history.
@@ -756,7 +1079,7 @@ class LLMClient:
     # ------------------------------------------------------------------
 
     @classmethod
-    def mistral(cls, api_key: str, model: str = "mistral-small-latest", **kwargs) -> "LLMClient":
+    def mistral(cls, api_key: str, model: str = "mistral-large-latest", **kwargs) -> "LLMClient":
         return cls(
             api_key=api_key,
             base_url="https://api.mistral.ai/v1",
@@ -804,12 +1127,16 @@ class ClimbingCoach:
         profile: Optional[ClimberProfile] = None,
         db_path: Optional[str | Path] = None,
         profile_path: str | Path = "climber_profile.json",
+        auto_sync: bool = False,
+
     ):
         self.llm = llm
         self.profile = profile
         self.profile_path = Path(profile_path)
         self.prompt_builder = PromptBuilder()
         self.mode: Optional[CoachMode] = None
+        self.auto_sync = auto_sync
+        self.plans: list[SessionPlan] = []
 
         # StatsBuilder is optional — works without a DB
         self._stats_builder: Optional[StatsBuilder] = None
@@ -835,10 +1162,11 @@ class ClimbingCoach:
         profile: Optional[ClimberProfile] = None,
         db_path: Optional[str | Path] = None,
         profile_path: str | Path = "climber_profile.json",
+        auto_sync: bool = False,
         **llm_kwargs,
     ) -> "ClimbingCoach":
         llm = LLMClient.mistral(api_key=api_key, model=model, **llm_kwargs)
-        return cls(llm=llm, profile=profile, db_path=db_path, profile_path=profile_path)
+        return cls(llm=llm, profile=profile, db_path=db_path, profile_path=profile_path, auto_sync=auto_sync)
 
     @classmethod
     def from_openai(
@@ -848,26 +1176,27 @@ class ClimbingCoach:
         profile: Optional[ClimberProfile] = None,
         db_path: Optional[str | Path] = None,
         profile_path: str | Path = "climber_profile.json",
+        auto_sync: bool = False,
         **llm_kwargs,
     ) -> "ClimbingCoach":
         llm = LLMClient.openai(api_key=api_key, model=model, **llm_kwargs)
-        return cls(llm=llm, profile=profile, db_path=db_path, profile_path=profile_path)
+        return cls(llm=llm, profile=profile, db_path=db_path, profile_path=profile_path, auto_sync=auto_sync)
 
     # ------------------------------------------------------------------
     # Session lifecycle
     # ------------------------------------------------------------------
 
-    def start_session(self, mode: CoachMode) -> str:
+    def _prepare_session(self, mode: CoachMode) -> str:
         """
-        Reset history, set mode, build system prompt, send opening message.
-        Returns the coach's opening line.
+        Reset history, set mode, build the system prompt, and return the
+        opening trigger message. Shared by start_session() and start_session_stream().
         """
         self.mode = mode
         self.llm.reset_history()
 
         if mode == CoachMode.ONBOARDING:
             self.llm.set_system(self.prompt_builder.onboarding_system())
-            opening_trigger = "Bonjour, je voudrais créer mon profil de coaching."
+            return "Bonjour, je voudrais créer mon profil de coaching."
 
         elif mode == CoachMode.COACHING:
             if not self.profile:
@@ -875,9 +1204,10 @@ class ClimbingCoach:
                     "No profile loaded. Run an onboarding session first, "
                     "or load a profile with ClimberProfile.load()."
                 )
-            if self._stats_builder:
+            if self._stats_builder and self.auto_sync:
                 self.collector.sync_from_profile(self.profile)
             stats = self._build_stats()
+            self._sync_profile_from_stats(stats)
             system = self.prompt_builder.coaching_system(self.profile, stats)
             self.llm.set_system(system)
             name = self.profile.name or "grimpeur"
@@ -885,21 +1215,108 @@ class ClimbingCoach:
             # the stats context. Let the coach decide what to highlight.
             recent_count = len(stats.recent_ascents) if stats else 0
             if recent_count:
-                opening_trigger = f"Bonjour coach, c'est {name}."
-            else:
-                opening_trigger = f"Bonjour coach, c'est {name}. Pas encore de stats disponibles."
+                return f"Bonjour coach, c'est {name}."
+            return f"Bonjour coach, c'est {name}. Pas encore de stats disponibles."
 
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
-        reply = self.llm.chat(opening_trigger)
-        return reply
+    def start_session(self, mode: CoachMode) -> str:
+        """
+        Reset history, set mode, build system prompt, send opening message.
+        Returns the coach's opening line.
+        """
+        opening_trigger = self._prepare_session(mode)
+        return self.llm.chat(opening_trigger)
+
+    def start_session_stream(self, mode: CoachMode):
+        """Same as start_session(), but yields the opening line incrementally."""
+        opening_trigger = self._prepare_session(mode)
+        yield from self.llm.chat_stream(opening_trigger)
 
     def chat(self, message: str) -> str:
         """Send a message and get the coach's reply."""
         if self.mode is None:
             raise RuntimeError("Call start_session() before chat().")
         return self.llm.chat(message)
+
+    def chat_stream(self, message: str):
+        """Send a message and yield the coach's reply incrementally."""
+        if self.mode is None:
+            raise RuntimeError("Call start_session() before chat().")
+        yield from self.llm.chat_stream(message)
+
+    def sync_now(self) -> None:
+        """Manually trigger a sync, regardless of auto_sync setting."""
+        if not self._stats_builder or not self.profile:
+            raise RuntimeError("No collector/profile configured — cannot sync.")
+        self.collector.sync_from_profile(self.profile)
+        self._sync_profile_from_stats(self._build_stats())
+        log.info("Manual sync triggered for user %s", self.profile.sboulder_user_id)
+
+    def _sync_profile_from_stats(self, stats: Optional[ClimbingStats]) -> None:
+        """
+        Copy DB-derived facts (current Arkose redpoint/flash level) into the
+        profile — deterministic, no LLM involved. Saves the profile if
+        anything actually changed.
+        """
+        if not stats or not self.profile:
+            return
+        changed = False
+        if stats.current_level and stats.current_level != self.profile.current_redpoint_level_arkose:
+            self.profile.current_redpoint_level_arkose = stats.current_level
+            changed = True
+        if stats.current_flash_level and stats.current_flash_level != self.profile.current_flash_level_arkose:
+            self.profile.current_flash_level_arkose = stats.current_flash_level
+            changed = True
+        if changed:
+            self.save_profile()
+            log.info("Profile levels auto-updated from stats")
+
+    # ------------------------------------------------------------------
+    # Session plan
+    # ------------------------------------------------------------------
+
+    def maybe_generate_plan(self) -> list[SessionPlan]:
+        """
+        One-shot call that inspects the recent conversation and extracts any NEW
+        concrete training session(s) as SessionPlan objects, appended to
+        self.plans. Already-known plan titles are passed back to the model so
+        it doesn't re-extract them — safe to call after every coaching turn.
+        """
+        if self.mode != CoachMode.COACHING:
+            return []
+
+        transcript = self._history_to_transcript(last_n=8)
+        known_titles = [
+            f"{p.program_title + ' — ' if p.program_title else ''}{p.title}"
+            for p in self.plans
+        ]
+        raw = self.llm.call_once(
+            system=self.prompt_builder.plan_system(self.profile, known_plans=known_titles),
+            user_message=f"Conversation récente :\n\n{transcript}",
+        )
+
+        clean = raw.strip()
+        if clean.startswith("```"):
+            clean = clean.split("```")[1]
+            if clean.startswith("json"):
+                clean = clean[4:]
+        clean = clean.strip()
+
+        try:
+            data = json.loads(clean)
+        except json.JSONDecodeError:
+            log.warning("Plan extraction returned invalid JSON, ignoring")
+            return []
+
+        new_plans = []
+        for plan_data in data.get("plans") or []:
+            plan = SessionPlan.from_dict(plan_data)
+            self.plans.append(plan)
+            new_plans.append(plan)
+            log.info("Session plan added: %r", plan.title)
+        return new_plans
 
     # ------------------------------------------------------------------
     # Onboarding extraction
@@ -929,9 +1346,29 @@ class ClimbingCoach:
 
         data = json.loads(clean)
         profile = ClimberProfile.from_dict(data)
+
+        # The extraction only covers what was said in the interview — never
+        # let it erase the DB linkage (sboulder_user_id) or drop gyms already
+        # known from a previous profile. Merge instead of overwrite.
+        if self.profile:
+            profile.sboulder_user_id = self.profile.sboulder_user_id
+            existing_lower = {g.lower() for g in self.profile.gyms}
+            merged_gyms = list(self.profile.gyms)
+            for g in profile.gyms:
+                if g.lower() not in existing_lower:
+                    merged_gyms.append(g)
+                    existing_lower.add(g.lower())
+            profile.gyms = merged_gyms
+
         self.profile = profile
         log.info("Profile extracted: %r", profile)
         return profile
+
+    def available_gyms(self) -> list[str]:
+        """Gym slugs known to the DB — the only valid values for profile.gyms."""
+        if not self._stats_builder:
+            return []
+        return self._stats_builder._all_gyms()
 
     def save_profile(self, path: Optional[str | Path] = None) -> None:
         """Save the current profile to JSON."""
@@ -954,15 +1391,24 @@ class ClimbingCoach:
     def _build_stats(self) -> Optional[ClimbingStats]:
         if not self._stats_builder or not self.profile or not self.profile.sboulder_user_id:
             return None
+        
+        min_level = None
+        if self.profile.current_flash_level_arkose:
+            min_level = encode_grade_level(self.profile.current_flash_level_arkose)
+
         return self._stats_builder.build(
             user_id=self.profile.sboulder_user_id,
             gyms=self.profile.gyms or None,
+            min_level=min_level
         )
 
-    def _history_to_transcript(self) -> str:
+    def _history_to_transcript(self, last_n: Optional[int] = None) -> str:
+        history = self.llm.history
+        if last_n:
+            history = history[-last_n:]
         return "\n\n".join(
             f"{'Coach' if m['role'] == 'assistant' else 'Grimpeur'} : {m['content']}"
-            for m in self.llm.history
+            for m in history
         )
 
     def close(self):
