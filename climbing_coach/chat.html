@@ -145,6 +145,8 @@
     #profileSaveBar { padding-top: 4px; }
     #profileSaveBtn { width: 100%; padding: 12px; border-radius: 12px; border: none; background: #2563eb; color: white; font-size: 15px; }
     #profileSaveStatus { text-align: center; margin-top: 8px; color: #888; font-size: 13px; }
+    #offlineBanner { display: none; position: fixed; bottom: 66px; left: 12px; right: 12px; z-index: 20; background: #7f1d1d; color: #fff; text-align: center; font-size: 13px; padding: 8px; border-radius: 10px; }
+    body.is-offline #offlineBanner { display: block; }
   </style>
 </head>
 <body>
@@ -181,6 +183,7 @@
   <div id="profileView">
     <div id="profileEmpty">Chargement...</div>
   </div>
+  <div id="offlineBanner">📡 Hors ligne — vérifie ta connexion</div>
   <div id="inputBar">
     <input id="msgInput" placeholder="Écris à ton coach..." />
     <button id="sendBtn">Envoyer</button>
@@ -189,6 +192,13 @@
 <script>
 let sessionId = null;
 const chatEl = document.getElementById("chat");
+
+function updateOfflineState() {
+  document.body.classList.toggle("is-offline", !navigator.onLine);
+}
+window.addEventListener("online", updateOfflineState);
+window.addEventListener("offline", updateOfflineState);
+updateOfflineState();
 
 function formatLastSync(iso) {
   if (!iso) return "Jamais synchronisé";
@@ -216,6 +226,16 @@ function addTyping() {
   const div = document.createElement("div");
   div.className = "msg coach typing";
   div.innerHTML = "<span class='dot'></span><span class='dot'></span><span class='dot'></span>";
+  chatEl.appendChild(div);
+  window.scrollTo(0, document.body.scrollHeight);
+  return div;
+}
+
+function addRetryMsg(text, onRetry) {
+  const div = document.createElement("div");
+  div.className = "msg coach";
+  div.innerHTML = `<div>${text}</div><button class="proposalBtn retryBtn" style="margin-top:8px;">↻ Réessayer</button>`;
+  div.querySelector(".retryBtn").onclick = onRetry;
   chatEl.appendChild(div);
   window.scrollTo(0, document.body.scrollHeight);
   return div;
@@ -257,10 +277,17 @@ async function streamIntoBubble(res, typingEl, myToken) {
     window.scrollTo(0, document.body.scrollHeight);
   }
 
+  const streamFailed = full.includes("[[STREAM_ERROR]]");
+  full = full.replace("[[STREAM_ERROR]]", "").trim();
+
   if (msgDiv) {
-    msgDiv.innerHTML = marked.parse(full);
+    msgDiv.innerHTML = full ? marked.parse(full) : "";
   } else {
     typingEl.remove();
+  }
+  if (streamFailed) {
+    addMsg("⚠️ La réponse a été interrompue (problème serveur ou LLM). Réessaie si besoin.", "coach");
+  } else if (!msgDiv) {
     addMsg("(réponse vide)", "coach");
   }
 }
@@ -287,7 +314,7 @@ async function startSession() {
   } catch (e) {
     if (myToken !== sessionToken) return; // superseded — ignore the abort error
     typingEl.remove();
-    addMsg("❌ Impossible de démarrer la session, réessaie.", "coach");
+    addRetryMsg("❌ Impossible de démarrer la session (serveur injoignable ?).", () => startSession());
   }
 }
 
@@ -370,6 +397,7 @@ async function sendMessage() {
     if (myToken !== sessionToken) return; // mode was switched mid-message — ignore
     typingEl.remove();
     addMsg("❌ Erreur de connexion, réessaie.", "coach");
+    input.value = text; // don't lose what was typed
   } finally {
     if (myToken === sessionToken) {
       input.disabled = false;
@@ -390,11 +418,17 @@ async function syncNow() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: sessionId })
     });
-    const data = await res.json();
-    btn.textContent = res.ok ? "✅ Synchronisé" : "❌ Erreur";
-    if (res.ok) updateLastSync(data.last_sync);
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      btn.textContent = "✅ Synchronisé";
+      updateLastSync(data.last_sync);
+    } else {
+      btn.textContent = "❌ Erreur";
+      document.getElementById("lastSync").textContent = `❌ Sync échouée${data.detail ? " : " + data.detail : ""}`;
+    }
   } catch (e) {
     btn.textContent = "❌ Erreur";
+    document.getElementById("lastSync").textContent = "❌ Sync échouée — vérifie ta connexion";
   }
   setTimeout(() => {
     btn.textContent = "🔄 Synchroniser";
@@ -454,7 +488,8 @@ async function loadStats() {
     const data = await res.json();
     renderStats(data);
   } catch (e) {
-    el.innerHTML = "<div id='statsEmpty'>❌ Impossible de charger les stats</div>";
+    el.innerHTML = "<div id='statsEmpty'>❌ Impossible de charger les stats<br><button class='addBtn' id='statsRetryBtn' style='margin-top:10px;'>↻ Réessayer</button></div>";
+    document.getElementById("statsRetryBtn").onclick = loadStats;
   }
 }
 
@@ -577,7 +612,8 @@ async function loadPlan() {
     const data = await res.json();
     renderPlan(data.plans);
   } catch (e) {
-    el.innerHTML = "<div id='planEmpty'>❌ Impossible de charger le plan</div>";
+    el.innerHTML = "<div id='planEmpty'>❌ Impossible de charger le plan<br><button class='addBtn' id='planRetryBtn' style='margin-top:10px;'>↻ Réessayer</button></div>";
+    document.getElementById("planRetryBtn").onclick = loadPlan;
   }
 }
 
@@ -1048,7 +1084,8 @@ async function loadProfile() {
     currentProfileRaw = data;
     renderProfileForm(data);
   } catch (e) {
-    el.innerHTML = "<div id='profileEmpty'>❌ Impossible de charger le profil</div>";
+    el.innerHTML = "<div id='profileEmpty'>❌ Impossible de charger le profil<br><button class='addBtn' id='profileRetryBtn' style='margin-top:10px;'>↻ Réessayer</button></div>";
+    document.getElementById("profileRetryBtn").onclick = loadProfile;
   }
 }
 

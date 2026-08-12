@@ -1,3 +1,5 @@
+import inspect
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -14,6 +16,24 @@ from src.sboulder_collector import setup_logging
 
 setup_logging()
 app = FastAPI()
+logger = logging.getLogger("climbing_coach")
+
+STREAM_ERROR_MARKER = "[[STREAM_ERROR]]"
+
+async def _safe_stream(gen):
+    """Wrap a coach stream so a mid-stream crash (e.g. Mistral API failure)
+    ends with a detectable marker instead of just cutting the connection,
+    which the client can't distinguish from a normal end of stream."""
+    try:
+        if inspect.isasyncgen(gen):
+            async for chunk in gen:
+                yield chunk
+        else:
+            for chunk in gen:
+                yield chunk
+    except Exception:
+        logger.exception("stream failed")
+        yield f"\n\n{STREAM_ERROR_MARKER}"
 
 DEFAULT_DB_PATH = r"C:\Users\Franc\OneDrive\Documents\GitHub\test_arkose\database\climbing.db"
 DEFAULT_PROFILE_PATH = r"C:\Users\Franc\OneDrive\Documents\GitHub\test_arkose\database\franck.json"
@@ -83,7 +103,7 @@ def start_session(req: StartSessionRequest):
         "X-Mode": mode.value,
     }
     return StreamingResponse(
-        coach.start_session_stream(mode),
+        _safe_stream(coach.start_session_stream(mode)),
         media_type="text/plain",
         headers=headers,
     )
@@ -103,7 +123,7 @@ def chat_stream(req: ChatRequest, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=404, detail="unknown session, call /session/start first")
     background_tasks.add_task(coach.maybe_generate_plan)
     return StreamingResponse(
-        coach.chat_stream(req.message),
+        _safe_stream(coach.chat_stream(req.message)),
         media_type="text/plain",
         background=background_tasks,
     )
@@ -113,7 +133,11 @@ async def sync_session(req: SyncRequest):
     coach = sessions.get(req.session_id)
     if not coach:
         raise HTTPException(status_code=404, detail="Session not found")
-    coach.sync_now()
+    try:
+        coach.sync_now()
+    except Exception as e:
+        logger.exception("sync failed")
+        raise HTTPException(status_code=502, detail=f"Sync échouée : {e}")
     return {"status": "ok", "last_sync": _get_last_sync(coach)}
 
 @app.post("/session/onboarding/finish")
