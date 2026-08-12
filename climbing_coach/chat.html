@@ -1054,6 +1054,19 @@ async function saveProfile() {
   btn.disabled = true;
   status.textContent = "Enregistrement...";
   try {
+    // currentProfileRaw is a snapshot from whenever this tab was loaded.
+    // If a coaching session ran since then, the auto-synced Arkose level
+    // may have changed on disk — refresh just those two fields so saving
+    // the form doesn't silently revert them to a stale value.
+    try {
+      const freshRes = await fetch(`/session/profile?session_id=${sessionId}`);
+      if (freshRes.ok) {
+        const fresh = await freshRes.json();
+        currentProfileRaw.current_redpoint_level_arkose = fresh.current_redpoint_level_arkose;
+        currentProfileRaw.current_flash_level_arkose = fresh.current_flash_level_arkose;
+      }
+    } catch (e) {} // non-fatal — fall back to the cached snapshot
+
     const updated = collectProfileFromForm();
     const res = await fetch("/session/profile", {
       method: "PUT",
