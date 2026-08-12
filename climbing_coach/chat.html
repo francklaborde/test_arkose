@@ -122,6 +122,21 @@
     .formRow textarea { resize: vertical; min-height: 50px; font-family: inherit; }
     .formRow .hint { font-size: 11px; color: #666; margin-top: 3px; }
     .formGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .gymChips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .gymChip {
+      display: inline-flex; align-items: center; gap: 6px; padding: 6px 6px 6px 14px; border-radius: 20px;
+      background: #2563eb; color: #fff; font-size: 13px;
+    }
+    .gymRemoveBtn {
+      background: rgba(255,255,255,0.18); border: none; color: #fff; width: 18px; height: 18px;
+      border-radius: 50%; font-size: 13px; line-height: 1; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; padding: 0;
+    }
+    .gymRemoveBtn:hover { background: rgba(255,255,255,0.32); }
+    #gymAddRow select {
+      width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px;
+      border: 1px solid #333; background: #1a1a1a; color: #eee; font-size: 15px;
+    }
     .injuryCard { background: #1a1a1a; border-radius: 10px; padding: 10px; margin-bottom: 8px; }
     .injuryCard .injuryTop { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
     .injuryCard input[type="text"] { margin-top: 6px; }
@@ -745,8 +760,14 @@ async function savePlanEdits(wrapper, plan) {
 let currentProfileRaw = null;
 let injuriesState = [];
 let availableGyms = [];
+let selectedGyms = [];
+let gymAddOpen = false;
 
 function joinList(arr) { return (arr || []).join(", "); }
+function gymLabel(slug) {
+  const name = slug.includes("/") ? slug.split("/").slice(1).join("/") : slug;
+  return name.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
 function splitList(str) {
   return (str || "").split(",").map(s => s.trim()).filter(Boolean);
 }
@@ -780,25 +801,64 @@ function renderInjuries() {
   });
 }
 
+function gymChipHtml(slug) {
+  return `<span class="gymChip">${gymLabel(slug)}<button type="button" class="gymRemoveBtn" data-gym="${slug}">×</button></span>`;
+}
+
+function renderGymAddRow() {
+  const el = document.getElementById("gymAddRow");
+  if (!el) return;
+  const remaining = availableGyms.filter(g => !selectedGyms.includes(g));
+  if (!gymAddOpen) {
+    el.innerHTML = remaining.length
+      ? `<button type="button" class="addBtn" id="gymAddBtn">+ Ajouter une salle</button>`
+      : (selectedGyms.length ? "" : `<div class="hint">Aucune salle trouvée en base.</div>`);
+    const btn = document.getElementById("gymAddBtn");
+    if (btn) btn.onclick = () => { gymAddOpen = true; renderGymAddRow(); };
+    return;
+  }
+  el.innerHTML = `
+    <select id="gymAddSelect">
+      <option value="">Choisir une salle…</option>
+      ${remaining.map(g => `<option value="${g}">${gymLabel(g)}</option>`).join("")}
+    </select>`;
+  const select = document.getElementById("gymAddSelect");
+  select.focus();
+  select.onchange = () => {
+    if (select.value) selectedGyms.push(select.value);
+    gymAddOpen = false;
+    renderGyms();
+  };
+  select.onblur = () => {
+    setTimeout(() => { if (gymAddOpen) { gymAddOpen = false; renderGymAddRow(); } }, 150);
+  };
+}
+
+function renderGyms() {
+  const el = document.getElementById("gymsContainer");
+  el.innerHTML = selectedGyms.length
+    ? `<div class="gymChips">${selectedGyms.map(gymChipHtml).join("")}</div>`
+    : `<div class="hint">Aucune salle sélectionnée.</div>`;
+  el.querySelectorAll(".gymRemoveBtn").forEach(btn => {
+    btn.onclick = () => {
+      selectedGyms = selectedGyms.filter(g => g !== btn.dataset.gym);
+      renderGyms();
+    };
+  });
+  renderGymAddRow();
+}
+
 function renderProfileForm(profile) {
   const el = document.getElementById("profileView");
   injuriesState = (profile.injuries || []).map(i => ({ ...i }));
-  const gymsState = new Set(profile.gyms || []);
-  const gymsHtml = availableGyms.length
-    ? availableGyms.map(g => `
-        <label style="display:flex; align-items:center; gap:6px; font-size:13px;">
-          <input type="checkbox" class="pf-gym" value="${g}" ${gymsState.has(g) ? "checked" : ""}/> ${g}
-        </label>`).join("")
-    : `<div class="hint">Aucune salle trouvée en base.</div>`;
+  selectedGyms = [...(profile.gyms || [])];
+  gymAddOpen = false;
 
   el.innerHTML = `
     <div class="formSection">
-      <div class="sectionTitle">Salles</div>
-      <div class="formRow">
-        <label>Salles fréquentées</label>
-        <div style="display:flex; flex-direction:column; gap:4px;">${gymsHtml}</div>
-        <div class="hint">Utilisées pour la synchronisation avec la base — liste fixe, non modifiable en texte libre.</div>
-      </div>
+      <div class="sectionTitle">Salles fréquentées</div>
+      <div id="gymsContainer"></div>
+      <div id="gymAddRow" style="margin-top:8px;"></div>
     </div>
     <div class="formSection">
       <div class="sectionTitle">Physique</div>
@@ -904,6 +964,7 @@ function renderProfileForm(profile) {
       <div id="profileSaveStatus"></div>
     </div>
   `;
+  renderGyms();
   renderInjuries();
   document.getElementById("addInjuryBtn").onclick = () => {
     injuriesState.push({ description: "", active: true, avoid: [] });
@@ -922,11 +983,9 @@ function collectProfileFromForm() {
     };
   }).filter(i => i.description);
 
-  const gyms = Array.from(document.querySelectorAll(".pf-gym:checked")).map(cb => cb.value);
-
   return {
     ...currentProfileRaw,
-    gyms,
+    gyms: [...selectedGyms],
     sex: document.getElementById("pf_sex").value || null,
     age: numOrNull("pf_age"),
     height_cm: numOrNull("pf_height_cm"),
