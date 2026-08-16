@@ -1,6 +1,8 @@
 import inspect
 import logging
+import sqlite3
 from pathlib import Path
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -19,6 +21,9 @@ app = FastAPI()
 logger = logging.getLogger("climbing_coach")
 
 STREAM_ERROR_MARKER = "[[STREAM_ERROR]]"
+
+def _now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat()
 
 async def _safe_stream(gen):
     """Wrap a coach stream so a mid-stream crash (e.g. Mistral API failure)

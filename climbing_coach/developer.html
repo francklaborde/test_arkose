@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Développeur — Climbing Coach</title>
+  <meta name="theme-color" content="#111111">
+  <style>
+    body { font-family: -apple-system, sans-serif; margin: 0; padding: 0; background: #111; color: #eee; }
+    #topBar { position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; background: #111; border-bottom: 1px solid #262626; z-index: 10; }
+    #topBar h1 { font-size: 16px; margin: 0; }
+    #topBar a { color: #9db4ff; text-decoration: none; font-size: 13px; }
+    main { padding: 16px; max-width: 720px; margin: 0 auto; }
+
+    .sectionTitle { font-size: 13px; color: #888; margin: 22px 0 10px; text-transform: uppercase; letter-spacing: 0.03em; }
+    .sectionTitle:first-of-type { margin-top: 0; }
+
+    .navGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .navCard {
+      display: block; text-decoration: none; color: #eee; background: #2a2a2a; border-radius: 14px;
+      padding: 18px 14px; text-align: center; border: 1px solid #303030;
+    }
+    .navCard:active { background: #333; }
+    .navCard .icon { font-size: 26px; display: block; margin-bottom: 8px; }
+    .navCard .label { font-size: 15px; font-weight: 600; }
+    .navCard .hint { font-size: 12px; color: #888; margin-top: 4px; }
+
+    .totalsGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .statCard { background: #2a2a2a; border-radius: 14px; padding: 14px; }
+    .statCard .label { font-size: 12px; color: #888; margin-bottom: 4px; }
+    .statCard .value { font-size: 20px; font-weight: 600; }
+
+    .gymCard { background: #2a2a2a; border-radius: 14px; padding: 14px; margin-bottom: 10px; }
+    .gymCard .gymName { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+    .gymCard .statRow { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #222; font-size: 13px; color: #ccc; }
+    .gymCard .statRow:last-child { border-bottom: none; }
+    .gymCard .statRow span:first-child { color: #888; }
+    .neverSynced { color: #f87171; }
+
+    #dbEmpty { color: #888; text-align: center; margin-top: 20px; }
+    .retryBtn { margin-top: 10px; padding: 8px 14px; border-radius: 10px; border: 1px dashed #444; background: none; color: #aaa; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div id="topBar">
+    <h1>🛠 Espace développeur</h1>
+    <a href="/">← Retour à l'app</a>
+  </div>
+  <main>
+    <div class="sectionTitle">Aller à</div>
+    <div class="navGrid">
+      <a class="navCard" href="/?mode=coaching">
+        <span class="icon">🧗</span>
+        <div class="label">Coach</div>
+        <div class="hint">Session de coaching</div>
+      </a>
+      <a class="navCard" href="/?mode=onboarding">
+        <span class="icon">📋</span>
+        <div class="label">Onboarding</div>
+        <div class="hint">Créer / rejouer le profil</div>
+      </a>
+    </div>
+
+    <div class="sectionTitle">Base de données</div>
+    <div id="dbStats">
+      <div id="dbEmpty">Chargement...</div>
+    </div>
+  </main>
+
+<script>
+function formatLastSync(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return d.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function gymLabel(slug) {
+  const name = slug.includes("/") ? slug.split("/").slice(1).join("/") : slug;
+  return name.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+function renderDbStats(data) {
+  const el = document.getElementById("dbStats");
+  const t = data.totals || {};
+  const gyms = data.gyms || [];
+
+  const totalsHtml = `
+    <div class="totalsGrid">
+      <div class="statCard"><div class="label">Salles</div><div class="value">${gyms.length}</div></div>
+      <div class="statCard"><div class="label">Voies (boulders)</div><div class="value">${t.boulders ?? 0}</div></div>
+      <div class="statCard"><div class="label">Ascensions</div><div class="value">${t.ascents ?? 0}</div></div>
+      <div class="statCard"><div class="label">Commentaires</div><div class="value">${t.comments ?? 0}</div></div>
+      <div class="statCard"><div class="label">Grimpeurs distincts</div><div class="value">${t.distinct_climbers ?? 0}</div></div>
+    </div>
+  `;
+
+  const gymsHtml = gyms.length
+    ? gyms.map(g => {
+        const lastSync = formatLastSync(g.last_sync);
+        return `
+          <div class="gymCard">
+            <div class="gymName">${gymLabel(g.gym)}</div>
+            <div class="statRow"><span>Voies en base</span><span>${g.route_count}</span></div>
+            <div class="statRow"><span>Voies actives (non fermées)</span><span>${g.active_route_count}</span></div>
+            <div class="statRow"><span>Nombre de syncs</span><span>${g.sync_count}</span></div>
+            <div class="statRow"><span>Dernière synchro</span><span class="${lastSync ? "" : "neverSynced"}">${lastSync || "Jamais"}</span></div>
+          </div>
+        `;
+      }).join("")
+    : "<div id='dbEmpty'>Aucune salle trouvée en base.</div>";
+
+  el.innerHTML = totalsHtml + gymsHtml;
+}
+
+async function loadDbStats() {
+  const el = document.getElementById("dbStats");
+  el.innerHTML = "<div id='dbEmpty'>Chargement...</div>";
+  try {
+    const res = await fetch("/developer/db-stats");
+    if (!res.ok) throw new Error("bad response");
+    const data = await res.json();
+    renderDbStats(data);
+  } catch (e) {
+    el.innerHTML = "<div id='dbEmpty'>❌ Impossible de charger les stats de la base<br><button class='retryBtn' id='dbRetryBtn'>↻ Réessayer</button></div>";
+    document.getElementById("dbRetryBtn").onclick = loadDbStats;
+  }
+}
+
+loadDbStats();
+</script>
+</body>
+</html>

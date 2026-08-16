@@ -110,6 +110,12 @@
     #profileView { display: none; padding: 100px 16px 100px; }
     body.onboarding-mode #profileView { padding-top: 170px; }
     #profileEmpty { color: #888; text-align: center; margin-top: 40px; }
+
+    #devView { display: none; padding: 100px 16px 90px; }
+    body.onboarding-mode #devView { padding-top: 170px; }
+    #devEmpty { color: #888; text-align: center; margin-top: 40px; }
+    .devModeRow { display: flex; gap: 8px; margin-bottom: 14px; }
+    .devModeRow button { flex: 1; padding: 10px; border-radius: 12px; border: 1px solid #333; background: #1f1f1f; color: #eee; font-size: 13px; }
     .formSection { background: #2a2a2a; border-radius: 14px; padding: 16px; margin-bottom: 12px; }
     .formSection .sectionTitle { font-size: 13px; color: #888; margin-bottom: 10px; text-transform: uppercase; }
     .formRow { margin-bottom: 10px; }
@@ -156,6 +162,7 @@
       <button class="tabBtn" id="tabStats">Stats</button>
       <button class="tabBtn" id="tabPlan">Plan</button>
       <button class="tabBtn" id="tabProfile">Profil</button>
+      <button class="tabBtn" id="tabDev">🛠 Dev</button>
     </div>
     <div id="topBarRight">
       <span id="lastSync"></span>
@@ -182,6 +189,9 @@
   </div>
   <div id="profileView">
     <div id="profileEmpty">Chargement...</div>
+  </div>
+  <div id="devView">
+    <div id="devEmpty">Chargement...</div>
   </div>
   <div id="offlineBanner">📡 Hors ligne — vérifie ta connexion</div>
   <div id="inputBar">
@@ -1147,32 +1157,105 @@ async function loadProfile() {
   }
 }
 
+// --- Dev tab (temporary, dev-phase only): DB stats + quick mode switch ---
+function formatLastSync2(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return d.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderDevStats(data) {
+  const el = document.getElementById("devView");
+  const t = data.totals || {};
+  const gyms = data.gyms || [];
+
+  const gymsHtml = gyms.map(g => {
+    const lastSync = formatLastSync2(g.last_sync);
+    return `
+      <div class="levelCard">
+        <div class="label">${gymLabel(g.gym)}</div>
+        <div class="statRow"><span>Voies en base</span><span>${g.route_count}</span></div>
+        <div class="statRow"><span>Voies actives (non fermées)</span><span>${g.active_route_count}</span></div>
+        <div class="statRow"><span>Nombre de syncs</span><span>${g.sync_count}</span></div>
+        <div class="statRow"><span>Dernière synchro</span><span>${lastSync || "Jamais"}</span></div>
+      </div>
+    `;
+  }).join("");
+
+  el.innerHTML = `
+    <div class="devModeRow">
+      <button id="devGoCoach">🧗 Mode Coach</button>
+      <button id="devGoOnboarding">📋 Mode Onboarding</button>
+    </div>
+    <div class="levelCard">
+      <div class="label">Totaux base de données</div>
+      <div class="statRow"><span>Salles</span><span>${gyms.length}</span></div>
+      <div class="statRow"><span>Voies (boulders)</span><span>${t.boulders ?? 0}</span></div>
+      <div class="statRow"><span>Ascensions</span><span>${t.ascents ?? 0}</span></div>
+      <div class="statRow"><span>Commentaires</span><span>${t.comments ?? 0}</span></div>
+      <div class="statRow"><span>Grimpeurs distincts</span><span>${t.distinct_climbers ?? 0}</span></div>
+    </div>
+    ${gymsHtml}
+  `;
+
+  document.getElementById("devGoCoach").onclick = () => { showTab("chat"); setMode("coaching"); };
+  document.getElementById("devGoOnboarding").onclick = () => { showTab("chat"); setMode("onboarding"); };
+}
+
+async function loadDevStats() {
+  const el = document.getElementById("devView");
+  el.innerHTML = "<div id='devEmpty'>Chargement...</div>";
+  try {
+    const res = await fetch("/developer/db-stats");
+    if (!res.ok) throw new Error("bad response");
+    const data = await res.json();
+    renderDevStats(data);
+  } catch (e) {
+    el.innerHTML = "<div id='devEmpty'>❌ Impossible de charger les stats de la base<br><button class='addBtn' id='devRetryBtn' style='margin-top:10px;'>↻ Réessayer</button></div>";
+    document.getElementById("devRetryBtn").onclick = loadDevStats;
+  }
+}
+
 function showTab(tab) {
   const chatEl2 = document.getElementById("chat");
   const statsEl = document.getElementById("statsView");
   const planEl = document.getElementById("planView");
   const profileEl = document.getElementById("profileView");
+  const devEl = document.getElementById("devView");
   const inputBar = document.getElementById("inputBar");
   document.getElementById("tabChat").classList.toggle("active", tab === "chat");
   document.getElementById("tabStats").classList.toggle("active", tab === "stats");
   document.getElementById("tabPlan").classList.toggle("active", tab === "plan");
   document.getElementById("tabProfile").classList.toggle("active", tab === "profile");
+  document.getElementById("tabDev").classList.toggle("active", tab === "dev");
 
   chatEl2.style.display = tab === "chat" ? "block" : "none";
   inputBar.style.display = tab === "chat" ? "flex" : "none";
   statsEl.style.display = tab === "stats" ? "block" : "none";
   planEl.style.display = tab === "plan" ? "block" : "none";
   profileEl.style.display = tab === "profile" ? "block" : "none";
+  devEl.style.display = tab === "dev" ? "block" : "none";
 
   if (tab === "stats") loadStats();
   if (tab === "plan") loadPlan();
   if (tab === "profile") loadProfile();
+  if (tab === "dev") loadDevStats();
 }
 
 document.getElementById("tabChat").onclick = () => showTab("chat");
 document.getElementById("tabStats").onclick = () => showTab("stats");
 document.getElementById("tabPlan").onclick = () => showTab("plan");
 document.getElementById("tabProfile").onclick = () => showTab("profile");
+document.getElementById("tabDev").onclick = () => showTab("dev");
+
+// Lets the /developer page deep-link straight into a mode (?mode=onboarding).
+const urlMode = new URLSearchParams(window.location.search).get("mode");
+if (urlMode === "onboarding") {
+  currentMode = "onboarding";
+  document.getElementById("modeCoachingBtn").classList.remove("active");
+  document.getElementById("modeOnboardingBtn").classList.add("active");
+  document.body.classList.add("onboarding-mode");
+}
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js");
