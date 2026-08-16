@@ -251,5 +251,113 @@ def update_profile(req: ProfileUpdateRequest):
     coach.save_profile()
     return {"status": "ok"}
 
-# --- Serve manifest.json, sw.js, icons, etc. at root paths ---
+class SboulderIdRequest(BaseModel):
+    session_id: str
+    sboulder_user_id: str
+
+def _set_sboulder_user_id(coach: ClimbingCoach, sboulder_user_id: str) -> None:
+    if not coach.profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    coach.profile.sboulder_user_id = sboulder_user_id.strip()
+    coach.save_profile()
+
+@app.put("/session/profile/sboulder-id")
+def update_sboulder_id(req: SboulderIdRequest):
+    """Manual fallback: paste a sboulder_user_id directly (e.g. found via
+    DevTools) instead of using the Arkose+ bookmarklet."""
+    coach = sessions.get(req.session_id)
+    if not coach:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _set_sboulder_user_id(coach, req.sboulder_user_id)
+    return {"status": "ok"}
+
+def _get_db_stats() -> dict:
+    """Read-only snapshot of the sqlite DB for the /developer page: route
+    counts and last-sync time per gym, plus overall totals."""
+    conn = sqlite3.connect(DEFAULT_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        boulders_by_gym = {
+            row["gym"]: row["count"]
+            for row in conn.execute("SELECT gym, COUNT(*) AS count FROM boulders GROUP BY gym")
+        }
+        active_by_gym = {
+            row["gym"]: row["count"]
+            for row in conn.execute(
+                "SELECT gym, COUNT(*) AS count FROM boulders WHERE (closed_at IS NULL OR closed_at > ?) GROUP BY gym", 
+                (_now_iso(),)
+            )
+        }
+        sync_by_gym = {
+            row["gym"]: {"last_sync": row["last_sync"], "sync_count": row["sync_count"]}
+            for row in conn.execute(
+                "SELECT gym, MAX(synced_at) AS last_sync, COUNT(*) AS sync_count FROM sync_log GROUP BY gym"
+            )
+        }
+        # boulders and sync_log don't always list the exact same gyms (e.g. a
+        # gym that's been synced but has no routes yet), so union both sets.
+        all_gyms = sorted(set(boulders_by_gym) | set(sync_by_gym))
+        gyms = [
+            {
+                "gym": gym,
+                "route_count": boulders_by_gym.get(gym, 0),
+                "active_route_count": active_by_gym.get(gym, 0),
+                "last_sync": sync_by_gym.get(gym, {}).get("last_sync"),
+                "sync_count": sync_by_gym.get(gym, {}).get("sync_count", 0),
+            }
+            for gym in all_gyms
+        ]
+        totals = dict(
+            conn.execute(
+                "SELECT "
+                "(SELECT COUNT(*) FROM boulders) AS boulders, "
+                "(SELECT COUNT(*) FROM ascents) AS ascents, "
+                "(SELECT COUNT(*) FROM comments) AS comments, "
+                "(SELECT COUNT(DISTINCT user_id) FROM ascents) AS distinct_climbers"
+            ).fetchone()
+        )
+        return {"gyms": gyms, "totals": totals}
+    finally:
+        conn.close()
+
+@app.get("/developer/db-stats")
+def developer_db_stats():
+    try:
+        return _get_db_stats()
+    except Exception as e:
+        logger.exception("failed to compute db stats")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/developer", response_class=HTMLResponse)
+def developer_page():
+    with open("developer.html", encoding="utf-8") as f:
+        return f.read()
+
+@app.get("/session/connect-sboulder", response_class=HTMLResponse)
+def connect_sboulder(session_id: str, sboulder_user_id: str):
+    """Hit by the 'Connect Arkose+' bookmarklet via a plain page navigation
+    (javascript: bookmarklets can't do fetch() across origins cleanly),
+    so this returns a small confirmation page instead of JSON."""
+    coach = sessions.get(session_id)
+    if not coach:
+        return HTMLResponse(
+            "<p>Session introuvable — retourne sur l'app et réessaie.</p>",
+            status_code=404,
+        )
+    try:
+        _set_sboulder_user_id(coach, sboulder_user_id)
+    except HTTPException as e:
+        return HTMLResponse(f"<p>❌ {e.detail}</p>", status_code=e.status_code)
+    return HTMLResponse(
+        """
+        <html><body style="font-family:sans-serif;text-align:center;padding:40px;">
+          <h2>✅ Compte Arkose+ connecté</h2>
+          <p>Tu peux retourner sur l'app.</p>
+          <a href="/">Retourner à l'app</a>
+          <script>setTimeout(() => location.href = '/', 1500);</script>
+        </body></html>
+        """
+    )
+
+
 app.mount("/", StaticFiles(directory=Path(__file__).parent), name="static")

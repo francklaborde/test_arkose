@@ -799,6 +799,19 @@ suggérée avec conviction vaut mieux que deux options neutres jetées côte à 
 Pas plus d'un emoji dans tout le message, et seulement s'il apporte vraiment quelque chose.
 """
 
+    NO_SBOULDER_ACCOUNT_PROMPT = """## Compte Arkose+ non connecté
+Aucune statistique de grimpe n'est disponible car ce grimpeur n'a pas encore \
+connecté son compte Arkose+ à l'application.
+- Ne lui demande JAMAIS de te décrire manuellement ses derniers blocs, envois \
+ou séances — ce n'est pas le fonctionnement prévu de l'app, et ça ne remplace \
+pas les vraies statistiques.
+- Dès le début de la conversation, explique-lui brièvement qu'il doit connecter \
+son compte Arkose+ depuis l'onglet Profil (bouton "Connecter Arkose+") pour que \
+tu puisses accéder à ses statistiques réelles et le coacher dessus.
+- Tu peux échanger sur ses objectifs ou son ressenti général en attendant, mais \
+rappelle que le coaching personnalisé nécessite la connexion du compte.
+"""
+
     # ------------------------------------------------------------------
     # Extraction (used internally after onboarding)
     # ------------------------------------------------------------------
@@ -921,6 +934,8 @@ doigts (si poutre disponible), gainage, etc. — jamais de bloc ni de voie.
         parts.append(profile.to_llm_context())
         if stats:
             parts.append(stats.to_llm_context())
+        elif not profile.sboulder_user_id:
+            parts.append(self.NO_SBOULDER_ACCOUNT_PROMPT)
         tone_instruction = self._tone_instruction(profile.coach_tone)
         if tone_instruction:
             parts.append(tone_instruction)

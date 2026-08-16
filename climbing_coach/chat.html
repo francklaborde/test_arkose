@@ -892,6 +892,26 @@ function renderProfileForm(profile) {
 
   el.innerHTML = `
     <div class="formSection">
+      <div class="sectionTitle">Compte Arkose+</div>
+      <div class="hint" style="margin-bottom:10px;">
+        ${profile.sboulder_user_id
+          ? "✅ Compte connecté (ID : " + profile.sboulder_user_id + ")"
+          : "⚠️ Compte non connecté — la synchro ne fonctionnera pas tant que ce n'est pas fait."}
+      </div>
+      <ol style="font-size:13px;color:#aaa;padding-left:18px;margin:0 0 10px;">
+        <li>Fais glisser ce bouton dans ta barre de favoris (PC uniquement pour l'instant)
+          <div style="margin:8px 0;"><a id="sboulderBookmarklet" href="#" style="display:inline-block;padding:8px 14px;background:#2563eb;color:#fff;border-radius:8px;text-decoration:none;">🔗 Connecter Arkose+</a></div>
+        </li>
+        <li>Va sur <a href="https://plus.arkose.com/?connexion=1" target="_blank">plus.arkose.com</a> et connecte-toi</li>
+        <li>Clique sur le favori que tu viens d'ajouter</li>
+      </ol>
+      <div class="formRow">
+        <label>Ou colle l'ID manuellement</label>
+        <input type="text" id="pf_sboulder_manual" placeholder="ID Arkose+" />
+      </div>
+      <button class="addBtn" id="sboulderManualBtn">Enregistrer l'ID</button>
+    </div>
+    <div class="formSection">
       <div class="sectionTitle">Salles fréquentées</div>
       <div id="gymsContainer"></div>
       <div id="gymAddRow" style="margin-top:8px;"></div>
@@ -1002,6 +1022,31 @@ function renderProfileForm(profile) {
   `;
   renderGyms();
   renderInjuries();
+
+  const bookmarkletTarget = `${window.location.origin}/session/connect-sboulder?session_id=${encodeURIComponent(sessionId)}&sboulder_user_id=`;
+  const bookmarkletCode = "javascript:(function(){"
+    + "if(typeof Meteor==='undefined'||!Meteor.userId||!Meteor.userId()){"
+    + "alert('Connecte-toi d\\'abord sur plus.arkose.com, puis clique à nouveau sur ce favori.');return;}"
+    + "location.href=" + JSON.stringify(bookmarkletTarget) + "+encodeURIComponent(Meteor.userId());"
+    + "})();";
+  document.getElementById("sboulderBookmarklet").href = bookmarkletCode;
+
+  document.getElementById("sboulderManualBtn").onclick = async () => {
+    const val = document.getElementById("pf_sboulder_manual").value.trim();
+    if (!val) return;
+    try {
+      const res = await fetch("/session/profile/sboulder-id", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, sboulder_user_id: val })
+      });
+      if (!res.ok) throw new Error("bad response");
+      loadProfile();
+    } catch (e) {
+      alert("❌ Erreur lors de l'enregistrement de l'ID");
+    }
+  };
+
   document.getElementById("addInjuryBtn").onclick = () => {
     injuriesState.push({ description: "", active: true, avoid: [] });
     renderInjuries();
