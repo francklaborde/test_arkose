@@ -8,6 +8,7 @@ dependencies = [
     "annotated-types>=0.7.0",
     "fastapi>=0.140.7",
     "openai>=2.44.0",
+    "python-dotenv>=1.0.1",
     "requests>=2.34.2",
     "uvicorn>=0.51.0",
     "websocket-client>=1.9.0",

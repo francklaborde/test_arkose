@@ -1,8 +1,13 @@
 import inspect
 import logging
+import os
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -40,8 +45,16 @@ async def _safe_stream(gen):
         logger.exception("stream failed")
         yield f"\n\n{STREAM_ERROR_MARKER}"
 
-DEFAULT_DB_PATH = r"C:\Users\Franc\OneDrive\Documents\GitHub\test_arkose\database\climbing.db"
-DEFAULT_PROFILE_PATH = r"C:\Users\Franc\OneDrive\Documents\GitHub\test_arkose\database\franck.json"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_DB_PATH = os.environ.get("CLIMBING_DB_PATH", str(_REPO_ROOT / "database" / "climbing.db"))
+DEFAULT_PROFILE_PATH = os.environ.get("CLIMBING_PROFILE_PATH", str(_REPO_ROOT / "database" / "franck.json"))
+
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
+if not MISTRAL_API_KEY:
+    raise RuntimeError(
+        "MISTRAL_API_KEY is not set. Create a .env file (see .env.example) "
+        "or set it in your environment before starting the server."
+    )
 
 # In-memory session store: session_id -> ClimbingCoach instance
 sessions: dict[str, ClimbingCoach] = {}
@@ -87,12 +100,11 @@ def _get_last_sync(coach: ClimbingCoach) -> Optional[str]:
 
 @app.post("/session/start")
 def start_session(req: StartSessionRequest):
-    API_KEY = "REMOVED_API_KEY"
     session_id = str(uuid.uuid4())
     mode = CoachMode.ONBOARDING if req.mode == "onboarding" else CoachMode.COACHING
 
     coach = ClimbingCoach.from_mistral(  # adjust to your actual factory method name
-        api_key=API_KEY,
+        api_key=MISTRAL_API_KEY,
         db_path=DEFAULT_DB_PATH,
         profile_path=DEFAULT_PROFILE_PATH,
     )
