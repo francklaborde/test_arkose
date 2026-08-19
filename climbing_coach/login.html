@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connexion — Climbing Coach</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#111111">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <style>
+    body {
+      font-family: -apple-system, sans-serif;
+      margin: 0; padding: 0;
+      background: #111; color: #eee;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh;
+    }
+    #card { width: 100%; max-width: 360px; padding: 24px; box-sizing: border-box; }
+    h1 { font-size: 20px; margin: 0 0 6px; }
+    p.hint { color: #888; font-size: 14px; margin: 0 0 24px; line-height: 1.4; }
+    input[type="email"] {
+      width: 100%; padding: 14px; border-radius: 12px; border: none;
+      font-size: 16px; box-sizing: border-box; margin-bottom: 12px;
+    }
+    button {
+      width: 100%; padding: 14px; border-radius: 12px; border: none;
+      background: #2563eb; color: white; font-size: 15px;
+    }
+    button:disabled { opacity: 0.5; }
+    #status { text-align: center; margin-top: 16px; font-size: 14px; color: #888; min-height: 20px; }
+  </style>
+</head>
+<body>
+  <div id="card">
+    <h1>🧗 Climbing Coach</h1>
+    <p class="hint">Entre ton email, on t'envoie un lien de connexion (valide 15 minutes, aucun mot de passe requis).</p>
+    <input type="email" id="emailInput" placeholder="ton@email.com" autocomplete="email" />
+    <button id="sendBtn">Envoyer le lien</button>
+    <div id="status"></div>
+  </div>
+
+  <script>
+    const emailInput = document.getElementById("emailInput");
+    const sendBtn = document.getElementById("sendBtn");
+    const status = document.getElementById("status");
+
+    async function requestLink() {
+      const email = emailInput.value.trim();
+      if (!email || !email.includes("@")) {
+        status.textContent = "Entre une adresse email valide.";
+        return;
+      }
+      sendBtn.disabled = true;
+      status.textContent = "Envoi en cours...";
+      try {
+        const res = await fetch("/auth/request-link", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email })
+        });
+        if (!res.ok) throw new Error("bad response");
+        status.textContent = "✅ Lien envoyé — vérifie ta boîte mail (et les spams).";
+      } catch (e) {
+        status.textContent = "❌ Erreur lors de l'envoi. Réessaie.";
+        sendBtn.disabled = false;
+      }
+    }
+
+    sendBtn.onclick = requestLink;
+    emailInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") requestLink();
+    });
+  </script>
+</body>
+</html>

@@ -317,6 +317,10 @@ async function startSession() {
       signal: controller.signal
     });
     if (myToken !== sessionToken) return; // a newer session started while we awaited
+    if (res.status === 401) {
+      window.location.href = "/login.html";
+      return;
+    }
     if (!res.ok) throw new Error("bad response");
     sessionId = res.headers.get("X-Session-Id");
     updateLastSync(res.headers.get("X-Last-Sync"));
@@ -808,6 +812,8 @@ let injuriesState = [];
 let availableGyms = [];
 let selectedGyms = [];
 let gymAddOpen = false;
+let sboulderPopup = null;
+let sboulderChannel = null;
 
 function joinList(arr) { return (arr || []).join(", "); }
 function gymLabel(slug) {
@@ -903,19 +909,22 @@ function renderProfileForm(profile) {
   el.innerHTML = `
     <div class="formSection">
       <div class="sectionTitle">Compte Arkose+</div>
-      <div class="hint" style="margin-bottom:10px;">
+      <div id="sboulderStatus" class="hint" style="margin-bottom:10px;">
         ${profile.sboulder_user_id
           ? "✅ Compte connecté (ID : " + profile.sboulder_user_id + ")"
           : "⚠️ Compte non connecté — la synchro ne fonctionnera pas tant que ce n'est pas fait."}
       </div>
       <ol style="font-size:13px;color:#aaa;padding-left:18px;margin:0 0 10px;">
-        <li>Fais glisser ce bouton dans ta barre de favoris (PC uniquement pour l'instant)
+        <li>Fais glisser ce bouton dans ta barre de favoris (ne clique pas dessus, glisse-le) :
           <div style="margin:8px 0;"><a id="sboulderBookmarklet" href="#" style="display:inline-block;padding:8px 14px;background:#2563eb;color:#fff;border-radius:8px;text-decoration:none;">🔗 Connecter Arkose+</a></div>
         </li>
-        <li>Va sur <a href="https://plus.arkose.com/?connexion=1" target="_blank">plus.arkose.com</a> et connecte-toi</li>
-        <li>Clique sur le favori que tu viens d'ajouter</li>
+        <li><button class="addBtn" id="sboulderOpenBtn" style="padding:6px 12px;">Ouvrir plus.arkose.com</button> et connecte-toi</li>
+        <li>Une fois connecté, clique sur le favori que tu viens d'ajouter</li>
       </ol>
-      <div class="formRow">
+      <div id="sboulderInstructions" style="display:none;font-size:13px;color:#aaa;margin-top:4px;">
+        En attente de connexion...
+      </div>
+      <div class="formRow" style="margin-top:14px;">
         <label>Ou colle l'ID manuellement</label>
         <input type="text" id="pf_sboulder_manual" placeholder="ID Arkose+" />
       </div>
@@ -1025,6 +1034,10 @@ function renderProfileForm(profile) {
       <div class="formRow"><textarea id="pf_notes">${profile.notes ?? ""}</textarea></div>
     </div>
 
+    <div class="formSection" style="text-align:center;">
+      <button class="addBtn" id="logoutBtn" style="color:#f66;">Se déconnecter</button>
+    </div>
+
     <div id="profileSaveBar">
       <button id="profileSaveBtn">Enregistrer le profil</button>
       <div id="profileSaveStatus"></div>
@@ -1033,13 +1046,37 @@ function renderProfileForm(profile) {
   renderGyms();
   renderInjuries();
 
+  document.getElementById("logoutBtn").onclick = async () => {
+    try {
+      await fetch("/auth/logout", { method: "POST" });
+    } catch (e) {}
+    window.location.href = "/login.html";
+  };
+
   const bookmarkletTarget = `${window.location.origin}/session/connect-sboulder?session_id=${encodeURIComponent(sessionId)}&sboulder_user_id=`;
   const bookmarkletCode = "javascript:(function(){"
     + "if(typeof Meteor==='undefined'||!Meteor.userId||!Meteor.userId()){"
-    + "alert('Connecte-toi d\\'abord sur plus.arkose.com, puis clique à nouveau sur ce favori.');return;}"
+    + "alert('Connecte-toi d\\'abord sur plus.arkose.com, puis reclique sur ce favori.');return;}"
     + "location.href=" + JSON.stringify(bookmarkletTarget) + "+encodeURIComponent(Meteor.userId());"
     + "})();";
   document.getElementById("sboulderBookmarklet").href = bookmarkletCode;
+
+  if (!sboulderChannel && "BroadcastChannel" in window) {
+    sboulderChannel = new BroadcastChannel("sboulder-connect");
+    sboulderChannel.onmessage = (event) => {
+      if (event.data === "connected") {
+        if (sboulderPopup && !sboulderPopup.closed) sboulderPopup.close();
+        const instr = document.getElementById("sboulderInstructions");
+        if (instr) instr.style.display = "none";
+        loadProfile();
+      }
+    };
+  }
+
+  document.getElementById("sboulderOpenBtn").onclick = () => {
+    sboulderPopup = window.open("https://plus.arkose.com/?connexion=1", "_blank");
+    document.getElementById("sboulderInstructions").style.display = "block";
+  };
 
   document.getElementById("sboulderManualBtn").onclick = async () => {
     const val = document.getElementById("pf_sboulder_manual").value.trim();

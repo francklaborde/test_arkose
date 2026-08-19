@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from fastapi import HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -20,6 +20,7 @@ from typing import Optional
 from src.climbing_coach import ClimbingCoach, CoachMode, PlanBlock
 from src.climber_profile import ClimberProfile
 from src.sboulder_collector import setup_logging
+from src.auth import AuthStore, COOKIE_NAME, send_magic_link_email
 
 setup_logging()
 app = FastAPI()
@@ -48,6 +49,7 @@ async def _safe_stream(gen):
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = os.environ.get("CLIMBING_DB_PATH", str(_REPO_ROOT / "database" / "climbing.db"))
 DEFAULT_PROFILE_PATH = os.environ.get("CLIMBING_PROFILE_PATH", str(_REPO_ROOT / "database" / "franck.json"))
+PROFILES_DIR = os.environ.get("CLIMBING_PROFILES_DIR", str(_REPO_ROOT / "database" / "profiles"))
 
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
 if not MISTRAL_API_KEY:
@@ -56,8 +58,26 @@ if not MISTRAL_API_KEY:
         "or set it in your environment before starting the server."
     )
 
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
+if not RESEND_API_KEY:
+    raise RuntimeError(
+        "RESEND_API_KEY is not set. Create a .env file (see .env.example) "
+        "or set it in your environment before starting the server."
+    )
+# Until you verify your own domain in Resend, you can only send from this
+# sandbox address, and ONLY to the email tied to your own Resend account —
+# fine for testing solo, but friends won't receive anything until you add
+# and verify a real domain at resend.com/domains and set FROM_EMAIL.
+FROM_EMAIL = os.environ.get("FROM_EMAIL", "Arkose Coach <onboarding@resend.dev>")
+# Base URL used to build the link in the magic-link email — set this in
+# .env once the app moves off localhost (e.g. to the VPS domain, over HTTPS).
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:8000")
+
+auth_store = AuthStore(DEFAULT_DB_PATH, PROFILES_DIR)
+
 # In-memory session store: session_id -> ClimbingCoach instance
 sessions: dict[str, ClimbingCoach] = {}
+session_accounts: dict[str, str] = {}  # session_id -> account_id
 
 class StartSessionRequest(BaseModel):
     mode: str = "coaching"  # "coaching" | "onboarding"
@@ -91,6 +111,9 @@ class ProfileUpdateRequest(BaseModel):
     session_id: str
     profile: dict
 
+class MagicLinkRequest(BaseModel):
+    email: str
+
 def _get_last_sync(coach: ClimbingCoach) -> Optional[str]:
     stats = coach.get_stats()
     if not stats or not stats.last_sync:
@@ -98,21 +121,88 @@ def _get_last_sync(coach: ClimbingCoach) -> Optional[str]:
     timestamps = [ts for ts in stats.last_sync.values() if ts]
     return max(timestamps) if timestamps else None
 
+def _get_current_account(request: Request) -> sqlite3.Row:
+    """Resolve the logged-in account from the session cookie, or 401."""
+    token = request.cookies.get(COOKIE_NAME)
+    account = auth_store.resolve_session(token) if token else None
+    if not account:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    return account
+
+@app.post("/auth/request-link")
+def request_magic_link(req: MagicLinkRequest):
+    email = req.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="Invalid email")
+    # Always create the account up front (not just on verify) so the
+    # profiles/ path exists even if the user never finishes clicking the
+    # link — harmless, and simpler than deferring account creation.
+    auth_store.get_or_create_account(email)
+    token = auth_store.create_magic_link(email)
+    verify_url = f"{APP_BASE_URL}/auth/verify?token={token}"
+    try:
+        send_magic_link_email(RESEND_API_KEY, FROM_EMAIL, email, verify_url)
+    except Exception as e:
+        logger.exception("failed to send magic link email")
+        raise HTTPException(status_code=502, detail=f"Email non envoyé : {e}")
+    return {"status": "ok"}
+
+@app.get("/auth/verify")
+def verify_magic_link(token: str):
+    email = auth_store.consume_magic_link(token)
+    if not email:
+        raise HTTPException(status_code=400, detail="Lien invalide ou expiré")
+    account = auth_store.get_or_create_account(email)
+    session_token = auth_store.create_session(account["account_id"])
+    response = RedirectResponse(url="/")
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=session_token,
+        max_age=90 * 24 * 3600,
+        httponly=True,
+        samesite="lax",
+        # secure=True should be added once this is served over HTTPS.
+    )
+    return response
+
+@app.get("/auth/me")
+def auth_me(request: Request):
+    account = _get_current_account(request)
+    return {"email": account["email"], "sboulder_user_id": account["sboulder_user_id"]}
+
+@app.post("/auth/logout")
+def logout(request: Request, response: Response):
+    token = request.cookies.get(COOKIE_NAME)
+    if token:
+        auth_store.delete_session(token)
+    response.delete_cookie(COOKIE_NAME)
+    return {"status": "ok"}
+
 @app.post("/session/start")
-def start_session(req: StartSessionRequest):
+def start_session(req: StartSessionRequest, request: Request):
+    account = _get_current_account(request)
     session_id = str(uuid.uuid4())
     mode = CoachMode.ONBOARDING if req.mode == "onboarding" else CoachMode.COACHING
+
+    profile_path = account["profile_path"]
+    if not Path(profile_path).exists():
+        # First session for this account — seed a blank profile, carrying
+        # over sboulder_user_id if it was already linked via /session/connect-sboulder
+        # before this first session (e.g. a returning magic-link login).
+        blank = ClimberProfile(sboulder_user_id=account["sboulder_user_id"] or "")
+        blank.save(profile_path)
 
     coach = ClimbingCoach.from_mistral(  # adjust to your actual factory method name
         api_key=MISTRAL_API_KEY,
         db_path=DEFAULT_DB_PATH,
-        profile_path=DEFAULT_PROFILE_PATH,
+        profile_path=profile_path,
     )
 
     if mode == CoachMode.COACHING:
-        coach.profile = ClimberProfile.load(DEFAULT_PROFILE_PATH)
+        coach.profile = ClimberProfile.load(profile_path)
 
     sessions[session_id] = coach
+    session_accounts[session_id] = account["account_id"]
     last_sync = _get_last_sync(coach) if mode == CoachMode.COACHING else None
     headers = {
         "X-Session-Id": session_id,
@@ -272,11 +362,15 @@ class SboulderIdRequest(BaseModel):
     session_id: str
     sboulder_user_id: str
 
-def _set_sboulder_user_id(coach: ClimbingCoach, sboulder_user_id: str) -> None:
+def _set_sboulder_user_id(coach: ClimbingCoach, session_id: str, sboulder_user_id: str) -> None:
     if not coach.profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    coach.profile.sboulder_user_id = sboulder_user_id.strip()
+    sboulder_user_id = sboulder_user_id.strip()
+    coach.profile.sboulder_user_id = sboulder_user_id
     coach.save_profile()
+    account_id = session_accounts.get(session_id)
+    if account_id:
+        auth_store.set_sboulder_user_id(account_id, sboulder_user_id)
 
 @app.put("/session/profile/sboulder-id")
 def update_sboulder_id(req: SboulderIdRequest):
@@ -285,7 +379,7 @@ def update_sboulder_id(req: SboulderIdRequest):
     coach = sessions.get(req.session_id)
     if not coach:
         raise HTTPException(status_code=404, detail="Session not found")
-    _set_sboulder_user_id(coach, req.sboulder_user_id)
+    _set_sboulder_user_id(coach, req.session_id, req.sboulder_user_id)
     return {"status": "ok"}
 
 def _get_db_stats() -> dict:
@@ -362,16 +456,29 @@ def connect_sboulder(session_id: str, sboulder_user_id: str):
             status_code=404,
         )
     try:
-        _set_sboulder_user_id(coach, sboulder_user_id)
+        _set_sboulder_user_id(coach, session_id, sboulder_user_id)
     except HTTPException as e:
         return HTMLResponse(f"<p>❌ {e.detail}</p>", status_code=e.status_code)
     return HTMLResponse(
         """
         <html><body style="font-family:sans-serif;text-align:center;padding:40px;">
           <h2>✅ Compte Arkose+ connecté</h2>
-          <p>Tu peux retourner sur l'app.</p>
+          <p id="sboulderMsg">Retour à l'app en cours...</p>
           <a href="/">Retourner à l'app</a>
-          <script>setTimeout(() => location.href = '/', 1500);</script>
+          <script>
+            try {
+              const ch = new BroadcastChannel("sboulder-connect");
+              ch.postMessage("connected");
+            } catch (e) {}
+            // If the original tab didn't pick this up (e.g. it was closed,
+            // or BroadcastChannel isn't supported), fall back to a manual
+            // close instruction instead of forcing a redirect that would
+            // just open the app a second time in this tab.
+            setTimeout(() => {
+              document.getElementById("sboulderMsg").textContent =
+                "Tu peux fermer cet onglet et retourner sur l'app.";
+            }, 800);
+          </script>
         </body></html>
         """
     )
