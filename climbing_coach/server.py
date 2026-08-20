@@ -185,10 +185,12 @@ def start_session(req: StartSessionRequest, request: Request):
     mode = CoachMode.ONBOARDING if req.mode == "onboarding" else CoachMode.COACHING
 
     profile_path = account["profile_path"]
-    if not Path(profile_path).exists():
-        # First session for this account — seed a blank profile, carrying
-        # over sboulder_user_id if it was already linked via /session/connect-sboulder
-        # before this first session (e.g. a returning magic-link login).
+    is_new_account = not Path(profile_path).exists()
+    if is_new_account:
+        # First session ever for this account — force onboarding regardless
+        # of what the client requested, and seed the blank profile now so a
+        # reload mid-onboarding doesn't re-trigger this.
+        mode = CoachMode.ONBOARDING
         blank = ClimberProfile(sboulder_user_id=account["sboulder_user_id"] or "")
         blank.save(profile_path)
 
