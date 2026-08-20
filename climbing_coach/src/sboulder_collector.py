@@ -742,7 +742,17 @@ class SBoulderCollector:
         return [self.sync(gym, limit) for gym in gyms]
 
     def sync_from_profile(self, profile: "ClimberProfile", limit: int = 500) -> list[SyncResult]:
-        """Sync all gyms listed in the climber's profile."""
+        """
+        Sync all gyms listed in the climber's profile.
+
+        The profile is the source of truth for sboulder_user_id — always
+        adopt it here (even if a user_id was already passed to __init__),
+        so a stale/missing id set at construction time can never silently
+        skip ascent detection while boulders keep syncing normally.
+        """
+        self.user_id = profile.sboulder_user_id or None
+        if not self.user_id:
+            log.warning("Profile has no sboulder_user_id — ascents will not be tracked")
         if not profile.gyms:
             log.warning("No gyms configured in profile — nothing to sync")
             return []
