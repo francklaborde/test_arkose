@@ -122,7 +122,7 @@ class ClimbingCoach:
         self.llm.reset_history()
 
         if mode == CoachMode.ONBOARDING:
-            self.llm.set_system(self.prompt_builder.onboarding_system())
+            self.llm.set_system(self.prompt_builder.onboarding_system(self.profile))
             return "Bonjour, je voudrais créer mon profil de coaching."
 
         elif mode == CoachMode.COACHING:
@@ -272,20 +272,20 @@ class ClimbingCoach:
         clean = clean.strip()
 
         data = json.loads(clean)
-        profile = ClimberProfile.from_dict(data)
+        extracted = ClimberProfile.from_dict(data)
 
-        # The extraction only covers what was said in the interview — never
-        # let it erase the DB linkage (sboulder_user_id) or drop gyms already
-        # known from a previous profile. Merge instead of overwrite.
-        if self.profile:
-            profile.sboulder_user_id = self.profile.sboulder_user_id
-            existing_lower = {g.lower() for g in self.profile.gyms}
-            merged_gyms = list(self.profile.gyms)
-            for g in profile.gyms:
-                if g.lower() not in existing_lower:
-                    merged_gyms.append(g)
-                    existing_lower.add(g.lower())
-            profile.gyms = merged_gyms
+        # The interview now only covers qualitative fields (styles, strengths/
+        # weaknesses, injuries, goals) — physical profile, level, gyms and
+        # training schedule are filled via the profile form beforehand and
+        # must survive this extraction untouched. Merge onto the existing
+        # profile instead of building a fresh one from the transcript alone.
+        profile = self.profile or ClimberProfile()
+        profile.preferred_styles = extracted.preferred_styles or profile.preferred_styles
+        profile.self_strengths = extracted.self_strengths or profile.self_strengths
+        profile.self_weaknesses = extracted.self_weaknesses or profile.self_weaknesses
+        profile.injuries = extracted.injuries or profile.injuries
+        profile.short_term_goals = extracted.short_term_goals or profile.short_term_goals
+        profile.long_term_goals = extracted.long_term_goals or profile.long_term_goals
 
         self.profile = profile
         log.info("Profile extracted: %r", profile)

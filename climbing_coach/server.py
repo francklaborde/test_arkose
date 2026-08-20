@@ -88,7 +88,6 @@ class ChatRequest(BaseModel):
 
 class OnboardingFinishRequest(BaseModel):
     session_id: str
-    profile_path: str
 
 class SyncRequest(BaseModel):
     session_id: str
@@ -200,8 +199,10 @@ def start_session(req: StartSessionRequest, request: Request):
         profile_path=profile_path,
     )
 
-    if mode == CoachMode.COACHING:
-        coach.profile = ClimberProfile.load(profile_path)
+    # Loaded for both modes now: onboarding needs it too, so the interview
+    # can see fields already filled via the profile form (physical, level,
+    # gyms, training) and skip asking about them again.
+    coach.profile = ClimberProfile.load(profile_path)
 
     sessions[session_id] = coach
     session_accounts[session_id] = account["account_id"]
@@ -210,6 +211,7 @@ def start_session(req: StartSessionRequest, request: Request):
         "X-Session-Id": session_id,
         "X-Last-Sync": last_sync or "",
         "X-Mode": mode.value,
+        "X-New-Account": "true" if is_new_account else "false",
     }
     return StreamingResponse(
         _safe_stream(coach.start_session_stream(mode)),
@@ -256,15 +258,14 @@ def finish_onboarding(req: OnboardingFinishRequest):
         raise HTTPException(status_code=404, detail="Session not found")
     if coach.mode != CoachMode.ONBOARDING:
         raise HTTPException(status_code=400, detail="Session is not in onboarding mode")
-    profile_path = req.profile_path.strip()
-    if not profile_path:
-        raise HTTPException(status_code=400, detail="profile_path is required")
     try:
         profile = coach.extract_profile_from_history()
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Extraction failed: {e}")
-    coach.save_profile(profile_path)
-    return {"status": "ok", "profile_path": profile_path, "profile": profile.to_dict()}
+    # No path needed — saves to the account's own profile file, set when the
+    # session was created.
+    coach.save_profile()
+    return {"status": "ok", "profile": profile.to_dict()}
 
 # --- Serve the minimal chat page ---
 @app.get("/", response_class=HTMLResponse)
