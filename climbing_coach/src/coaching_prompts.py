@@ -167,8 +167,8 @@ Aucune statistique de grimpe n'est disponible car l'ID Arkose+ n'a pas encore \
 ou séances — ce n'est pas le fonctionnement prévu de l'app, et ça ne remplace \
 pas les vraies statistiques.
 - Dès le début de la conversation, explique-lui brièvement qu'il doit renseigner \
-son ID Arkose+ dans l'onglet Profil (section "Compte Arkose+") pour que tu \
-puisses accéder à ses statistiques réelles et le coacher dessus.
+son ID Arkose+ dans son profil pour que tu puisses accéder à ses statistiques \
+réelles et le coacher dessus.
 - Tu peux échanger sur ses objectifs ou son ressenti général en attendant, mais \
 rappelle que le coaching personnalisé nécessite la connexion du compte.
 """

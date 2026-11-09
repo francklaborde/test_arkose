@@ -94,8 +94,6 @@
     #profileView { display: none; padding: 60px 16px 100px; }
     #profileEmpty { color: #888; text-align: center; margin-top: 40px; }
 
-    #devView { display: none; padding: 60px 16px 90px; }
-    #devEmpty { color: #888; text-align: center; margin-top: 40px; }
     .formSection { background: #2a2a2a; border-radius: 14px; padding: 16px; margin-bottom: 12px; }
     .formSection .sectionTitle { font-size: 13px; color: #888; margin-bottom: 10px; text-transform: uppercase; }
     .formRow { margin-bottom: 10px; }
@@ -142,7 +140,6 @@
       <button class="tabBtn" id="tabStats">Stats</button>
       <button class="tabBtn" id="tabPlan">Plan</button>
       <button class="tabBtn" id="tabProfile">Profil</button>
-      <button class="tabBtn" id="tabDev">🛠 Dev</button>
     </div>
     <div id="topBarRight">
       <span id="lastSync"></span>
@@ -158,9 +155,6 @@
   </div>
   <div id="profileView">
     <div id="profileEmpty">Chargement...</div>
-  </div>
-  <div id="devView">
-    <div id="devEmpty">Chargement...</div>
   </div>
   <div id="offlineBanner">📡 Hors ligne — vérifie ta connexion</div>
   <div id="inputBar">
@@ -821,24 +815,6 @@ function renderProfileForm(profile) {
 
   el.innerHTML = `
     <div class="formSection">
-      <div class="sectionTitle">Compte Arkose+</div>
-      <div id="sboulderStatus" class="hint" style="margin-bottom:10px;">
-        ${profile.sboulder_user_id
-          ? "✅ Compte connecté (ID : " + profile.sboulder_user_id + ")"
-          : "⚠️ Compte non connecté — la synchro ne fonctionnera pas tant que ce n'est pas fait."}
-      </div>
-      <ol style="font-size:13px;color:#aaa;padding-left:18px;margin:0 0 10px;">
-        <li><button class="addBtn" id="sboulderOpenBtn" style="padding:6px 12px;">Ouvrir plus.arkose.com</button> et connecte-toi</li>
-        <li>Dans la console du navigateur, tape <code>Meteor.userId()</code> pour récupérer ton ID</li>
-        <li>Colle-le ci-dessous</li>
-      </ol>
-      <div class="formRow">
-        <label>ID Arkose+ (Meteor userId)</label>
-        <input type="text" id="pf_sboulder_manual" placeholder="ex: qQFsxQKYvqRqYJNKa" />
-      </div>
-      <button class="addBtn" id="sboulderManualBtn">Enregistrer l'ID</button>
-    </div>
-    <div class="formSection">
       <div class="sectionTitle">Salles fréquentées</div>
       <div id="gymsContainer"></div>
       <div id="gymAddRow" style="margin-top:8px;"></div>
@@ -950,26 +926,6 @@ function renderProfileForm(profile) {
   renderGyms();
   renderInjuries();
 
-  document.getElementById("sboulderOpenBtn").onclick = () => {
-    window.open("https://plus.arkose.com/?connexion=1", "_blank");
-  };
-
-  document.getElementById("sboulderManualBtn").onclick = async () => {
-    const val = document.getElementById("pf_sboulder_manual").value.trim();
-    if (!val) return;
-    try {
-      const res = await fetch("/session/profile/sboulder-id", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, sboulder_user_id: val })
-      });
-      if (!res.ok) throw new Error("bad response");
-      loadProfile();
-    } catch (e) {
-      alert("❌ Erreur lors de l'enregistrement de l'ID");
-    }
-  };
-
   document.getElementById("addInjuryBtn").onclick = () => {
     injuriesState.push({ description: "", active: true, avoid: [] });
     renderInjuries();
@@ -1070,89 +1026,32 @@ async function loadProfile() {
   }
 }
 
-// --- Dev tab (temporary, dev-phase only): DB stats + quick mode switch ---
-function formatLastSync2(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return d.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
-}
-
-function renderDevStats(data) {
-  const el = document.getElementById("devView");
-  const t = data.totals || {};
-  const gyms = data.gyms || [];
-
-  const gymsHtml = gyms.map(g => {
-    const lastSync = formatLastSync2(g.last_sync);
-    return `
-      <div class="levelCard">
-        <div class="label">${gymLabel(g.gym)}</div>
-        <div class="statRow"><span>Voies en base</span><span>${g.route_count}</span></div>
-        <div class="statRow"><span>Voies actives (non fermées)</span><span>${g.active_route_count}</span></div>
-        <div class="statRow"><span>Nombre de syncs</span><span>${g.sync_count}</span></div>
-        <div class="statRow"><span>Dernière synchro</span><span>${lastSync || "Jamais"}</span></div>
-      </div>
-    `;
-  }).join("");
-
-  el.innerHTML = `
-    <div class="levelCard">
-      <div class="label">Totaux base de données</div>
-      <div class="statRow"><span>Salles</span><span>${gyms.length}</span></div>
-      <div class="statRow"><span>Voies (boulders)</span><span>${t.boulders ?? 0}</span></div>
-      <div class="statRow"><span>Ascensions</span><span>${t.ascents ?? 0}</span></div>
-      <div class="statRow"><span>Commentaires</span><span>${t.comments ?? 0}</span></div>
-      <div class="statRow"><span>Grimpeurs distincts</span><span>${t.distinct_climbers ?? 0}</span></div>
-    </div>
-    ${gymsHtml}
-  `;
-}
-
-async function loadDevStats() {
-  const el = document.getElementById("devView");
-  el.innerHTML = "<div id='devEmpty'>Chargement...</div>";
-  try {
-    const res = await fetch("/developer/db-stats");
-    if (!res.ok) throw new Error("bad response");
-    const data = await res.json();
-    renderDevStats(data);
-  } catch (e) {
-    el.innerHTML = "<div id='devEmpty'>❌ Impossible de charger les stats de la base<br><button class='addBtn' id='devRetryBtn' style='margin-top:10px;'>↻ Réessayer</button></div>";
-    document.getElementById("devRetryBtn").onclick = loadDevStats;
-  }
-}
-
 function showTab(tab) {
   const chatEl2 = document.getElementById("chat");
   const statsEl = document.getElementById("statsView");
   const planEl = document.getElementById("planView");
   const profileEl = document.getElementById("profileView");
-  const devEl = document.getElementById("devView");
   const inputBar = document.getElementById("inputBar");
   document.getElementById("tabChat").classList.toggle("active", tab === "chat");
   document.getElementById("tabStats").classList.toggle("active", tab === "stats");
   document.getElementById("tabPlan").classList.toggle("active", tab === "plan");
   document.getElementById("tabProfile").classList.toggle("active", tab === "profile");
-  document.getElementById("tabDev").classList.toggle("active", tab === "dev");
 
   chatEl2.style.display = tab === "chat" ? "block" : "none";
   inputBar.style.display = tab === "chat" ? "flex" : "none";
   statsEl.style.display = tab === "stats" ? "block" : "none";
   planEl.style.display = tab === "plan" ? "block" : "none";
   profileEl.style.display = tab === "profile" ? "block" : "none";
-  devEl.style.display = tab === "dev" ? "block" : "none";
 
   if (tab === "stats") loadStats();
   if (tab === "plan") loadPlan();
   if (tab === "profile") loadProfile();
-  if (tab === "dev") loadDevStats();
 }
 
 document.getElementById("tabChat").onclick = () => showTab("chat");
 document.getElementById("tabStats").onclick = () => showTab("stats");
 document.getElementById("tabPlan").onclick = () => showTab("plan");
 document.getElementById("tabProfile").onclick = () => showTab("profile");
-document.getElementById("tabDev").onclick = () => showTab("dev");
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js");
