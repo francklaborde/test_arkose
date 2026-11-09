@@ -23,7 +23,7 @@ class LLMClient:
     """
     Thin wrapper around an OpenAI-compatible chat API.
     Maintains message history for the current session.
-    Model-agnostic: works with Mistral, OpenAI, Groq, etc.
+    Model-agnostic: works with OpenRouter, OpenAI, Groq, etc.
     """
 
     def __init__(
@@ -133,10 +133,10 @@ class LLMClient:
     # ------------------------------------------------------------------
 
     @classmethod
-    def mistral(cls, api_key: str, model: str = "mistral-large-latest", **kwargs) -> "LLMClient":
+    def openrouter(cls, api_key: str, model: str = "google/gemma-4-31b-it", **kwargs) -> "LLMClient":
         return cls(
             api_key=api_key,
-            base_url="https://api.mistral.ai/v1",
+            base_url="https://openrouter.ai/api/v1",
             model=model,
             **kwargs,
         )

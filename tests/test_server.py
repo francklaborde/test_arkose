@@ -2,7 +2,7 @@
 Tests for the error-handling paths in server.py.
 
 A fake ClimbingCoach is injected directly into server.sessions so these run
-with no real DB, no Mistral call, and no sboulder connection — cheap and
+with no real DB, no LLM call, and no sboulder connection — cheap and
 fast, focused on "does the API behave correctly when something fails"
 rather than the coaching logic itself.
 """
@@ -52,7 +52,7 @@ class FakeCoach:
 
 def failing_stream(*_args, **_kwargs):
     yield "partiel"
-    raise RuntimeError("Mistral API unreachable")
+    raise RuntimeError("LLM API unreachable")
 
 
 @pytest.fixture
@@ -104,7 +104,7 @@ def test_sync_failure_returns_502_with_detail(client):
 
 def test_start_session_streams_normally(client, monkeypatch):
     coach = FakeCoach()
-    monkeypatch.setattr(server.ClimbingCoach, "from_mistral", classmethod(lambda cls, **kw: coach))
+    monkeypatch.setattr(server.ClimbingCoach, "from_openrouter", classmethod(lambda cls, **kw: coach))
     monkeypatch.setattr(
         server.ClimberProfile, "load_or_create",
         classmethod(lambda cls, path: ClimberProfile(sboulder_user_id="u1")),
@@ -120,7 +120,7 @@ def test_start_session_streams_normally(client, monkeypatch):
 def test_start_session_stream_crash_emits_error_marker(client, monkeypatch):
     coach = FakeCoach()
     coach.start_session_stream = failing_stream
-    monkeypatch.setattr(server.ClimbingCoach, "from_mistral", classmethod(lambda cls, **kw: coach))
+    monkeypatch.setattr(server.ClimbingCoach, "from_openrouter", classmethod(lambda cls, **kw: coach))
     monkeypatch.setattr(
         server.ClimberProfile, "load_or_create",
         classmethod(lambda cls, path: ClimberProfile(sboulder_user_id="u1")),
