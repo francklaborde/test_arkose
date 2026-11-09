@@ -31,7 +31,7 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 async def _safe_stream(gen):
-    """Wrap a coach stream so a mid-stream crash (e.g. Mistral API failure)
+    """Wrap a coach stream so a mid-stream crash (e.g. LLM API failure)
     ends with a detectable marker instead of just cutting the connection,
     which the client can't distinguish from a normal end of stream."""
     try:
@@ -49,10 +49,10 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = os.environ.get("CLIMBING_DB_PATH", str(_REPO_ROOT / "database" / "climbing.db"))
 DEFAULT_PROFILE_PATH = os.environ.get("CLIMBING_PROFILE_PATH", str(_REPO_ROOT / "database" / "franck.json"))
 
-MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
-if not MISTRAL_API_KEY:
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+if not OPENROUTER_API_KEY:
     raise RuntimeError(
-        "MISTRAL_API_KEY is not set. Create a .env file (see .env.example) "
+        "OPENROUTER_API_KEY is not set. Create a .env file (see .env.example) "
         "or set it in your environment before starting the server."
     )
 
@@ -99,8 +99,8 @@ def _get_last_sync(coach: ClimbingCoach) -> Optional[str]:
 def start_session():
     session_id = str(uuid.uuid4())
 
-    coach = ClimbingCoach.from_mistral(
-        api_key=MISTRAL_API_KEY,
+    coach = ClimbingCoach.from_openrouter(
+        api_key=OPENROUTER_API_KEY,
         db_path=DEFAULT_DB_PATH,
         profile_path=DEFAULT_PROFILE_PATH,
     )

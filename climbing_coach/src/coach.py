@@ -80,17 +80,17 @@ class ClimbingCoach:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_mistral(
+    def from_openrouter(
         cls,
         api_key: str,
-        model: str = "mistral-small-latest",
+        model: str = "google/gemma-4-31b-it",
         profile: Optional[ClimberProfile] = None,
         db_path: Optional[str | Path] = None,
         profile_path: str | Path = "climber_profile.json",
         auto_sync: bool = False,
         **llm_kwargs,
     ) -> "ClimbingCoach":
-        llm = LLMClient.mistral(api_key=api_key, model=model, **llm_kwargs)
+        llm = LLMClient.openrouter(api_key=api_key, model=model, **llm_kwargs)
         return cls(llm=llm, profile=profile, db_path=db_path, profile_path=profile_path, auto_sync=auto_sync)
 
     @classmethod

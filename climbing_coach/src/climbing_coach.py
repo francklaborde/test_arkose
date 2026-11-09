@@ -14,7 +14,7 @@ Kept as a thin re-export so existing imports keep working unchanged, e.g.:
     from climber_profile import ClimberProfile
 
     profile = ClimberProfile.load("franck.json")
-    coach = ClimbingCoach.from_mistral(profile=profile, db_path="climbing.db")
+    coach = ClimbingCoach.from_openrouter(profile=profile, db_path="climbing.db")
 
     coach.start_session()
     coach.chat("Bonjour !")
