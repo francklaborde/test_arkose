@@ -29,8 +29,7 @@ log.addHandler(logging.NullHandler())
 # ---------------------------------------------------------------------------
 
 class CoachMode(Enum):
-    ONBOARDING = "onboarding"   # guided interview to fill ClimberProfile
-    COACHING   = "coaching"     # regular coaching session
+    COACHING = "coaching"       # regular coaching session
 
 
 # ---------------------------------------------------------------------------
@@ -43,8 +42,7 @@ class ClimbingCoach:
 
     Handles:
     - Session lifecycle (start/reset)
-    - Mode switching (onboarding ↔ coaching)
-    - Profile extraction after onboarding
+    - Profile persistence
     - Stats injection into coaching prompts
     """
 
@@ -113,52 +111,43 @@ class ClimbingCoach:
     # Session lifecycle
     # ------------------------------------------------------------------
 
-    def _prepare_session(self, mode: CoachMode) -> str:
+    def _prepare_session(self) -> str:
         """
-        Reset history, set mode, build the system prompt, and return the
+        Reset history, build the coaching system prompt, and return the
         opening trigger message. Shared by start_session() and start_session_stream().
         """
-        self.mode = mode
+        self.mode = CoachMode.COACHING
         self.llm.reset_history()
 
-        if mode == CoachMode.ONBOARDING:
-            self.llm.set_system(self.prompt_builder.onboarding_system(self.profile))
-            return "Bonjour, je voudrais créer mon profil de coaching."
+        if not self.profile:
+            raise ValueError(
+                "No profile loaded. Load one with ClimberProfile.load()."
+            )
+        if self._stats_builder and self.auto_sync:
+            self.collector.sync_from_profile(self.profile)
+        stats = self._build_stats()
+        self._sync_profile_from_stats(stats)
+        system = self.prompt_builder.coaching_system(self.profile, stats)
+        self.llm.set_system(system)
+        name = self.profile.name or "grimpeur"
+        # Keep the trigger minimal — the system prompt already contains all
+        # the stats context. Let the coach decide what to highlight.
+        recent_count = len(stats.recent_ascents) if stats else 0
+        if recent_count:
+            return f"Bonjour coach, c'est {name}."
+        return f"Bonjour coach, c'est {name}. Pas encore de stats disponibles."
 
-        elif mode == CoachMode.COACHING:
-            if not self.profile:
-                raise ValueError(
-                    "No profile loaded. Run an onboarding session first, "
-                    "or load a profile with ClimberProfile.load()."
-                )
-            if self._stats_builder and self.auto_sync:
-                self.collector.sync_from_profile(self.profile)
-            stats = self._build_stats()
-            self._sync_profile_from_stats(stats)
-            system = self.prompt_builder.coaching_system(self.profile, stats)
-            self.llm.set_system(system)
-            name = self.profile.name or "grimpeur"
-            # Keep the trigger minimal — the system prompt already contains all
-            # the stats context. Let the coach decide what to highlight.
-            recent_count = len(stats.recent_ascents) if stats else 0
-            if recent_count:
-                return f"Bonjour coach, c'est {name}."
-            return f"Bonjour coach, c'est {name}. Pas encore de stats disponibles."
-
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
-
-    def start_session(self, mode: CoachMode) -> str:
+    def start_session(self) -> str:
         """
-        Reset history, set mode, build system prompt, send opening message.
+        Reset history, build system prompt, send opening message.
         Returns the coach's opening line.
         """
-        opening_trigger = self._prepare_session(mode)
+        opening_trigger = self._prepare_session()
         return self.llm.chat(opening_trigger)
 
-    def start_session_stream(self, mode: CoachMode):
+    def start_session_stream(self):
         """Same as start_session(), but yields the opening line incrementally."""
-        opening_trigger = self._prepare_session(mode)
+        opening_trigger = self._prepare_session()
         yield from self.llm.chat_stream(opening_trigger)
 
     def chat(self, message: str) -> str:
@@ -244,52 +233,6 @@ class ClimbingCoach:
             new_plans.append(plan)
             log.info("Session plan added: %r", plan.title)
         return new_plans
-
-    # ------------------------------------------------------------------
-    # Onboarding extraction
-    # ------------------------------------------------------------------
-
-    def extract_profile_from_history(self) -> ClimberProfile:
-        """
-        Run a one-shot extraction call on the current conversation history
-        to produce a ClimberProfile. Does not modify history.
-        """
-        if self.mode != CoachMode.ONBOARDING:
-            raise RuntimeError("extract_profile_from_history() only works after an ONBOARDING session.")
-
-        transcript = self._history_to_transcript()
-        raw = self.llm.call_once(
-            system=self.prompt_builder.extraction_system(),
-            user_message=f"Transcription de l'entretien :\n\n{transcript}",
-        )
-
-        # Strip markdown fences if model added them
-        clean = raw.strip()
-        if clean.startswith("```"):
-            clean = clean.split("```")[1]
-            if clean.startswith("json"):
-                clean = clean[4:]
-        clean = clean.strip()
-
-        data = json.loads(clean)
-        extracted = ClimberProfile.from_dict(data)
-
-        # The interview now only covers qualitative fields (styles, strengths/
-        # weaknesses, injuries, goals) — physical profile, level, gyms and
-        # training schedule are filled via the profile form beforehand and
-        # must survive this extraction untouched. Merge onto the existing
-        # profile instead of building a fresh one from the transcript alone.
-        profile = self.profile or ClimberProfile()
-        profile.preferred_styles = extracted.preferred_styles or profile.preferred_styles
-        profile.self_strengths = extracted.self_strengths or profile.self_strengths
-        profile.self_weaknesses = extracted.self_weaknesses or profile.self_weaknesses
-        profile.injuries = extracted.injuries or profile.injuries
-        profile.short_term_goals = extracted.short_term_goals or profile.short_term_goals
-        profile.long_term_goals = extracted.long_term_goals or profile.long_term_goals
-
-        self.profile = profile
-        log.info("Profile extracted: %r", profile)
-        return profile
 
     def available_gyms(self) -> list[str]:
         """Gym slugs known to the DB — the only valid values for profile.gyms."""

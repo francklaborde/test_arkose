@@ -16,7 +16,7 @@ Kept as a thin re-export so existing imports keep working unchanged, e.g.:
     profile = ClimberProfile.load("franck.json")
     coach = ClimbingCoach.from_mistral(profile=profile, db_path="climbing.db")
 
-    coach.start_session(CoachMode.ONBOARDING)
+    coach.start_session()
     coach.chat("Bonjour !")
 """
 

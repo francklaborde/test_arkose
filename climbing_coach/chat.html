@@ -41,8 +41,6 @@
     .tabBtn.active { background: #2a2a2a; color: #eee; }
     #topBarRight { display: flex; align-items: center; }
 
-    body.onboarding-mode #syncBtn, body.onboarding-mode #lastSync { display: none; }
-
     #statsView { display: none; padding: 60px 16px 90px; }
     .levelCard { background: #2a2a2a; border-radius: 14px; padding: 16px; margin-bottom: 12px; }
     .levelCard .label { font-size: 13px; color: #888; margin-bottom: 4px; }
@@ -98,8 +96,6 @@
 
     #devView { display: none; padding: 60px 16px 90px; }
     #devEmpty { color: #888; text-align: center; margin-top: 40px; }
-    .devModeRow { display: flex; gap: 8px; margin-bottom: 14px; }
-    .devModeRow button { flex: 1; padding: 10px; border-radius: 12px; border: 1px solid #333; background: #1f1f1f; color: #eee; font-size: 13px; }
     .formSection { background: #2a2a2a; border-radius: 14px; padding: 16px; margin-bottom: 12px; }
     .formSection .sectionTitle { font-size: 13px; color: #888; margin-bottom: 10px; text-transform: uppercase; }
     .formRow { margin-bottom: 10px; }
@@ -225,26 +221,11 @@ function addRetryMsg(text, onRetry) {
 }
 
 // Bumped every time a session (re)starts. In-flight streams from a
-// superseded session (e.g. a mode switch that happened mid-stream) check
-// this before touching the DOM so a stray late chunk can't land in the
-// wrong conversation. activeAbortController lets us also cancel the actual
-// in-flight fetch instead of just letting it dangle.
+// superseded session check this before touching the DOM so a stray late
+// chunk can't land in the wrong conversation. activeAbortController lets
+// us also cancel the actual in-flight fetch instead of just letting it dangle.
 let sessionToken = 0;
 let activeAbortController = null;
-// True once the onboarding LLM has signalled it's done (via the
-// [[ONBOARDING_DONE]] tag) — keeps the chat input locked so the interview
-// can't drift into open-ended chat once its job is finished.
-let onboardingLocked = false;
-
-function lockOnboardingInput() {
-  onboardingLocked = true;
-  const input = document.getElementById("msgInput");
-  const sendBtn = document.getElementById("sendBtn");
-  input.disabled = true;
-  sendBtn.disabled = true;
-  input.placeholder = "Entretien terminé — profil en cours d'enregistrement...";
-  saveOnboardingProfile();
-}
 
 // Reads a streaming text/plain response, filling a coach bubble as chunks arrive.
 // Renders plain text while streaming (partial markdown can produce broken HTML),
@@ -277,9 +258,6 @@ async function streamIntoBubble(res, typingEl, myToken) {
   const streamFailed = full.includes("[[STREAM_ERROR]]");
   full = full.replace("[[STREAM_ERROR]]", "").trim();
 
-  const onboardingDone = full.includes("[[ONBOARDING_DONE]]");
-  full = full.replace("[[ONBOARDING_DONE]]", "").trim();
-
   if (msgDiv) {
     msgDiv.innerHTML = full ? marked.parse(full) : "";
   } else {
@@ -290,7 +268,6 @@ async function streamIntoBubble(res, typingEl, myToken) {
   } else if (!msgDiv) {
     addMsg("(réponse vide)", "coach");
   }
-  if (onboardingDone && currentMode === "onboarding") lockOnboardingInput();
 }
 
 async function startSession() {
@@ -298,7 +275,6 @@ async function startSession() {
   if (activeAbortController) activeAbortController.abort();
   const controller = new AbortController();
   activeAbortController = controller;
-  onboardingLocked = false;
   document.getElementById("msgInput").disabled = false;
   document.getElementById("sendBtn").disabled = false;
   document.getElementById("msgInput").placeholder = "Écris à ton coach...";
@@ -307,67 +283,18 @@ async function startSession() {
   try {
     const res = await fetch("/session/start", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: currentMode }),
       signal: controller.signal
     });
     if (myToken !== sessionToken) return; // a newer session started while we awaited
-    if (res.status === 401) {
-      window.location.href = "/login.html";
-      return;
-    }
     if (!res.ok) throw new Error("bad response");
     sessionId = res.headers.get("X-Session-Id");
     updateLastSync(res.headers.get("X-Last-Sync"));
-
-    const serverMode = res.headers.get("X-Mode");
-    if (res.headers.get("X-New-Account") === "true") {
-      // Server forced onboarding for this brand-new account regardless of
-      // what we requested — sync our UI state and send the user to the
-      // profile form first instead of straight into the chat.
-      currentMode = serverMode || "onboarding";
-      isNewAccountOnboarding = true;
-      document.body.classList.add("onboarding-mode");
-      showTab("profile");
-    }
 
     await streamIntoBubble(res, typingEl, myToken);
   } catch (e) {
     if (myToken !== sessionToken) return; // superseded — ignore the abort error
     typingEl.remove();
     addRetryMsg("❌ Impossible de démarrer la session (serveur injoignable ?).", () => startSession());
-  }
-}
-
-// --- Mode selector (test the onboarding vs. coaching prompt) ---
-let currentMode = "coaching";
-// True while a brand-new account still has the "fill the form first" banner
-// pending in the Profile tab (server forced onboarding mode for this account).
-let isNewAccountOnboarding = false;
-
-function setMode(mode) {
-  if (mode === currentMode) return;
-  currentMode = mode;
-  document.body.classList.toggle("onboarding-mode", mode === "onboarding");
-  chatEl.innerHTML = "";
-  startSession();
-}
-
-// Once the onboarding interview signals it's done, extract the profile from
-// the transcript and save it automatically — no manual step needed.
-async function saveOnboardingProfile() {
-  if (!sessionId) return;
-  try {
-    const res = await fetch("/session/onboarding/finish", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "bad response");
-    addMsg("✅ Profil enregistré.", "coach");
-  } catch (e) {
-    addRetryMsg(`❌ Échec de l'enregistrement du profil (${e.message}).`, () => saveOnboardingProfile());
   }
 }
 
@@ -401,7 +328,7 @@ async function sendMessage() {
     addMsg("❌ Erreur de connexion, réessaie.", "coach");
     input.value = text; // don't lose what was typed
   } finally {
-    if (myToken === sessionToken && !onboardingLocked) {
+    if (myToken === sessionToken) {
       input.disabled = false;
       sendBtn.disabled = false;
       input.focus();
@@ -800,8 +727,6 @@ let injuriesState = [];
 let availableGyms = [];
 let selectedGyms = [];
 let gymAddOpen = false;
-let sboulderPopup = null;
-let sboulderChannel = null;
 
 function joinList(arr) { return (arr || []).join(", "); }
 function gymLabel(slug) {
@@ -895,17 +820,6 @@ function renderProfileForm(profile) {
   gymAddOpen = false;
 
   el.innerHTML = `
-    ${isNewAccountOnboarding ? `
-    <div class="formSection" style="border:1px solid #2563eb;">
-      <div class="sectionTitle">Bienvenue 👋</div>
-      <div class="hint" style="margin-bottom:10px;">
-        Remplis d'abord ces informations (physique, niveau, entraînement) — \
-        c'est plus rapide qu'à l'oral. Le coach t'interrogera ensuite juste \
-        sur ton ressenti (styles, points faibles, blessures, objectifs).
-      </div>
-      <button class="addBtn" id="startInterviewBtn">C'est fait → direction l'entretien</button>
-    </div>
-    ` : ""}
     <div class="formSection">
       <div class="sectionTitle">Compte Arkose+</div>
       <div id="sboulderStatus" class="hint" style="margin-bottom:10px;">
@@ -914,18 +828,13 @@ function renderProfileForm(profile) {
           : "⚠️ Compte non connecté — la synchro ne fonctionnera pas tant que ce n'est pas fait."}
       </div>
       <ol style="font-size:13px;color:#aaa;padding-left:18px;margin:0 0 10px;">
-        <li>Fais glisser ce bouton dans ta barre de favoris (ne clique pas dessus, glisse-le) :
-          <div style="margin:8px 0;"><a id="sboulderBookmarklet" href="#" style="display:inline-block;padding:8px 14px;background:#2563eb;color:#fff;border-radius:8px;text-decoration:none;">🔗 Connecter Arkose+</a></div>
-        </li>
         <li><button class="addBtn" id="sboulderOpenBtn" style="padding:6px 12px;">Ouvrir plus.arkose.com</button> et connecte-toi</li>
-        <li>Une fois connecté, clique sur le favori que tu viens d'ajouter</li>
+        <li>Dans la console du navigateur, tape <code>Meteor.userId()</code> pour récupérer ton ID</li>
+        <li>Colle-le ci-dessous</li>
       </ol>
-      <div id="sboulderInstructions" style="display:none;font-size:13px;color:#aaa;margin-top:4px;">
-        En attente de connexion...
-      </div>
-      <div class="formRow" style="margin-top:14px;">
-        <label>Ou colle l'ID manuellement</label>
-        <input type="text" id="pf_sboulder_manual" placeholder="ID Arkose+" />
+      <div class="formRow">
+        <label>ID Arkose+ (Meteor userId)</label>
+        <input type="text" id="pf_sboulder_manual" placeholder="ex: qQFsxQKYvqRqYJNKa" />
       </div>
       <button class="addBtn" id="sboulderManualBtn">Enregistrer l'ID</button>
     </div>
@@ -1033,10 +942,6 @@ function renderProfileForm(profile) {
       <div class="formRow"><textarea id="pf_notes">${profile.notes ?? ""}</textarea></div>
     </div>
 
-    <div class="formSection" style="text-align:center;">
-      <button class="addBtn" id="logoutBtn" style="color:#f66;">Se déconnecter</button>
-    </div>
-
     <div id="profileSaveBar">
       <button id="profileSaveBtn">Enregistrer le profil</button>
       <div id="profileSaveStatus"></div>
@@ -1045,36 +950,8 @@ function renderProfileForm(profile) {
   renderGyms();
   renderInjuries();
 
-  document.getElementById("logoutBtn").onclick = async () => {
-    try {
-      await fetch("/auth/logout", { method: "POST" });
-    } catch (e) {}
-    window.location.href = "/login.html";
-  };
-
-  const bookmarkletTarget = `${window.location.origin}/session/connect-sboulder?session_id=${encodeURIComponent(sessionId)}&sboulder_user_id=`;
-  const bookmarkletCode = "javascript:(function(){"
-    + "if(typeof Meteor==='undefined'||!Meteor.userId||!Meteor.userId()){"
-    + "alert('Connecte-toi d\\'abord sur plus.arkose.com, puis reclique sur ce favori.');return;}"
-    + "location.href=" + JSON.stringify(bookmarkletTarget) + "+encodeURIComponent(Meteor.userId());"
-    + "})();";
-  document.getElementById("sboulderBookmarklet").href = bookmarkletCode;
-
-  if (!sboulderChannel && "BroadcastChannel" in window) {
-    sboulderChannel = new BroadcastChannel("sboulder-connect");
-    sboulderChannel.onmessage = (event) => {
-      if (event.data === "connected") {
-        if (sboulderPopup && !sboulderPopup.closed) sboulderPopup.close();
-        const instr = document.getElementById("sboulderInstructions");
-        if (instr) instr.style.display = "none";
-        loadProfile();
-      }
-    };
-  }
-
   document.getElementById("sboulderOpenBtn").onclick = () => {
-    sboulderPopup = window.open("https://plus.arkose.com/?connexion=1", "_blank");
-    document.getElementById("sboulderInstructions").style.display = "block";
+    window.open("https://plus.arkose.com/?connexion=1", "_blank");
   };
 
   document.getElementById("sboulderManualBtn").onclick = async () => {
@@ -1098,20 +975,6 @@ function renderProfileForm(profile) {
     renderInjuries();
   };
   document.getElementById("profileSaveBtn").onclick = saveProfile;
-
-  const startInterviewBtn = document.getElementById("startInterviewBtn");
-  if (startInterviewBtn) {
-    startInterviewBtn.onclick = async () => {
-      await saveProfile();
-      isNewAccountOnboarding = false;
-      showTab("chat");
-      // Restart the onboarding session so its system prompt picks up the
-      // form data just saved (level, injuries context, etc.) instead of
-      // the blank profile it started with.
-      chatEl.innerHTML = "";
-      await startSession();
-    };
-  }
 }
 
 function collectProfileFromForm() {
@@ -1233,10 +1096,6 @@ function renderDevStats(data) {
   }).join("");
 
   el.innerHTML = `
-    <div class="devModeRow">
-      <button id="devGoCoach">🧗 Mode Coach</button>
-      <button id="devGoOnboarding">📋 Mode Onboarding</button>
-    </div>
     <div class="levelCard">
       <div class="label">Totaux base de données</div>
       <div class="statRow"><span>Salles</span><span>${gyms.length}</span></div>
@@ -1247,9 +1106,6 @@ function renderDevStats(data) {
     </div>
     ${gymsHtml}
   `;
-
-  document.getElementById("devGoCoach").onclick = () => { showTab("chat"); setMode("coaching"); };
-  document.getElementById("devGoOnboarding").onclick = () => { showTab("chat"); setMode("onboarding"); };
 }
 
 async function loadDevStats() {
@@ -1297,13 +1153,6 @@ document.getElementById("tabStats").onclick = () => showTab("stats");
 document.getElementById("tabPlan").onclick = () => showTab("plan");
 document.getElementById("tabProfile").onclick = () => showTab("profile");
 document.getElementById("tabDev").onclick = () => showTab("dev");
-
-// Lets the /developer page deep-link straight into a mode (?mode=onboarding).
-const urlMode = new URLSearchParams(window.location.search).get("mode");
-if (urlMode === "onboarding") {
-  currentMode = "onboarding";
-  document.body.classList.add("onboarding-mode");
-}
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js");

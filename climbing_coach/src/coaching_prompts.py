@@ -2,8 +2,8 @@
 coaching_prompts.py
 --------------------
 PlanBlock/SessionPlan (structured training-session plans) and
-PromptBuilder, which assembles system prompts from profile + stats +
-mode. Split out of climbing_coach.py to make prompt wording easy to
+PromptBuilder, which assembles system prompts from profile + stats.
+Split out of climbing_coach.py to make prompt wording easy to
 iterate on without touching DB or conversation logic.
 """
 
@@ -103,53 +103,6 @@ class PromptBuilder:
     """
 
     # ------------------------------------------------------------------
-    # Onboarding
-    # ------------------------------------------------------------------
-
-    ONBOARDING_PROMPT = """Tu es un coach escalade bienveillant et expérimenté \
-qui réalise un entretien d'onboarding avec un nouveau grimpeur. \
-Ton objectif est de collecter les informations qualitatives nécessaires pour \
-construire son profil de coaching personnalisé — celles qui méritent une vraie \
-discussion, pas une simple saisie de données.
-
-Le profil physique (sexe, âge, taille, envergure, poids), les salles \
-fréquentées, le niveau actuel et le rythme d'entraînement (séances/semaine, \
-durée, setup maison, autres activités) ont déjà été renseignés via un \
-formulaire — tu les trouveras ci-dessous dans le contexte si disponibles. \
-Ne les redemande JAMAIS. Tu peux t'appuyer dessus pour personnaliser tes \
-questions, mais ce n'est pas ton rôle de les collecter.
-
-Tu dois couvrir progressivement ces thèmes, dans un ordre naturel :
-1. Styles préférés et points forts ressentis
-2. Points faibles ressentis ou identifiés
-3. Blessures actuelles ou passées importantes
-4. Objectifs court terme et long terme
-
-Règles importantes :
-- Pose UNE seule question à la fois, ou un groupe logique de 2-3 questions courtes
-- Reformule et valide ce que le grimpeur te dit avant de passer au thème suivant
-- Adapte ton vocabulaire au niveau détecté
-- Si une réponse est vague, creuse avec une question de suivi
-- Reste conversationnel — mieux vaut un profil partiel honnête qu'un profil complet inventé
-
-Hors sujet strict — cet entretien sert UNIQUEMENT à construire le profil :
-- Ne donne AUCUN conseil d'entraînement, plan de séance, correction technique \
-ou recommandation, même si le grimpeur te le demande explicitement. \
-Réponds simplement que ce sera l'objet des sessions de coaching une fois le \
-profil créé, et reviens à la question en cours.
-- Ne prolonge jamais l'entretien au-delà des 4 thèmes ci-dessus.
-
-Fin de l'entretien :
-- Quand tu estimes avoir couvert les 4 thèmes, termine ta réponse par :
-  "J'ai maintenant une bonne image de ton profil. Veux-tu ajouter autre chose avant que je le finalise ?"
-- Dès que le grimpeur confirme qu'il n'a rien à ajouter (ou répond par une \
-formule équivalente à "non"), réponds par UNE SEULE phrase de clôture brève \
-et chaleureuse, puis termine ce message — et uniquement ce message — par le \
-tag exact `[[ONBOARDING_DONE]]` sur sa propre ligne, sans rien écrire après. \
-N'ajoute plus aucune question ni aucun message une fois ce tag envoyé.
-"""
-
-    # ------------------------------------------------------------------
     # Coaching base
     # ------------------------------------------------------------------
 
@@ -208,45 +161,16 @@ Pas plus d'un emoji dans tout le message, et seulement s'il apporte vraiment que
 """
 
     NO_SBOULDER_ACCOUNT_PROMPT = """## Compte Arkose+ non connecté
-Aucune statistique de grimpe n'est disponible car ce grimpeur n'a pas encore \
-connecté son compte Arkose+ à l'application.
+Aucune statistique de grimpe n'est disponible car l'ID Arkose+ n'a pas encore \
+été renseigné dans le profil.
 - Ne lui demande JAMAIS de te décrire manuellement ses derniers blocs, envois \
 ou séances — ce n'est pas le fonctionnement prévu de l'app, et ça ne remplace \
 pas les vraies statistiques.
-- Dès le début de la conversation, explique-lui brièvement qu'il doit connecter \
-son compte Arkose+ depuis l'onglet Profil (bouton "Connecter Arkose+") pour que \
-tu puisses accéder à ses statistiques réelles et le coacher dessus.
+- Dès le début de la conversation, explique-lui brièvement qu'il doit renseigner \
+son ID Arkose+ dans l'onglet Profil (section "Compte Arkose+") pour que tu \
+puisses accéder à ses statistiques réelles et le coacher dessus.
 - Tu peux échanger sur ses objectifs ou son ressenti général en attendant, mais \
 rappelle que le coaching personnalisé nécessite la connexion du compte.
-"""
-
-    # ------------------------------------------------------------------
-    # Extraction (used internally after onboarding)
-    # ------------------------------------------------------------------
-
-    EXTRACTION_PROMPT = """Tu es un extracteur de données structurées. \
-On te donne la transcription d'un entretien entre un coach escalade et un grimpeur.
-
-Ton unique rôle est d'extraire les informations mentionnées et de les retourner \
-en JSON pur, sans aucun texte avant ou après, sans balises markdown.
-
-Le profil physique, le niveau, les salles et le rythme d'entraînement sont \
-déjà renseignés ailleurs (formulaire) — cet entretien ne les couvre pas, \
-n'essaie donc pas de les extraire d'ici.
-
-Retourne UNIQUEMENT un objet JSON valide avec les champs suivants \
-(omets les champs non mentionnés, ne les invente jamais) :
-
-{
-  "preferred_styles": [string],
-  "self_strengths": [string],
-  "self_weaknesses": [string],
-  "injuries": [
-    { "description": string, "active": bool, "avoid": [string] }
-  ],
-  "short_term_goals": [string],
-  "long_term_goals": [string]
-}
 """
 
     # ------------------------------------------------------------------
@@ -308,11 +232,6 @@ doigts (si poutre disponible), gainage, etc. — jamais de bloc ni de voie.
     # Public methods
     # ------------------------------------------------------------------
 
-    def onboarding_system(self, profile: Optional[ClimberProfile] = None) -> str:
-        if not profile:
-            return self.ONBOARDING_PROMPT
-        return "\n\n".join([self.ONBOARDING_PROMPT, profile.to_llm_context()])
-
     def coaching_system(
         self,
         profile: ClimberProfile,
@@ -329,9 +248,6 @@ doigts (si poutre disponible), gainage, etc. — jamais de bloc ni de voie.
             parts.append(tone_instruction)
         parts.append(f"\nRéponds toujours en {self._lang_label(profile.coach_language)}.")
         return "\n\n".join(parts)
-
-    def extraction_system(self) -> str:
-        return self.EXTRACTION_PROMPT
 
     def plan_system(
         self,
